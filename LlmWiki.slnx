@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LlmWiki.Agents/LlmWiki.Agents.csproj" />
+    <Project Path="src/LlmWiki.Api/LlmWiki.Api.csproj" />
+    <Project Path="src/LlmWiki.Application/LlmWiki.Application.csproj" />
+    <Project Path="src/LlmWiki.Cli/LlmWiki.Cli.csproj" />
+    <Project Path="src/LlmWiki.Domain/LlmWiki.Domain.csproj" />
+    <Project Path="src/LlmWiki.Infrastructure/LlmWiki.Infrastructure.csproj" />
+    <Project Path="src/LlmWiki.Shared/LlmWiki.Shared.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LlmWiki.Agents.Tests/LlmWiki.Agents.Tests.csproj" />
+    <Project Path="tests/LlmWiki.Api.Tests/LlmWiki.Api.Tests.csproj" />
+    <Project Path="tests/LlmWiki.Application.Tests/LlmWiki.Application.Tests.csproj" />
+    <Project Path="tests/LlmWiki.Domain.Tests/LlmWiki.Domain.Tests.csproj" />
+    <Project Path="tests/LlmWiki.Infrastructure.Tests/LlmWiki.Infrastructure.Tests.csproj" />
+  </Folder>
+</Solution>

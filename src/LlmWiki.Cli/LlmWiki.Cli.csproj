@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Cli: console host. 'doctor' command mirrors the API /diagnostics checks. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>LlmWiki.Cli</RootNamespace>
+    <AssemblyName>llmwiki</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LlmWiki.Application\LlmWiki.Application.csproj" />
+    <ProjectReference Include="..\LlmWiki.Infrastructure\LlmWiki.Infrastructure.csproj" />
+    <ProjectReference Include="..\LlmWiki.Agents\LlmWiki.Agents.csproj" />
+    <ProjectReference Include="..\LlmWiki.Shared\LlmWiki.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,36 @@
+# ---- Secrets (NEVER commit the real env file) ----
+env/.env
+*.env.local
+**/secrets.json
+
+# ---- .NET ----
+bin/
+obj/
+*.user
+*.suo
+.vs/
+artifacts/
+TestResults/
+*.trx
+coverage*.xml
+coverage*.json
+[Dd]ebug/
+[Rr]elease/
+
+# ---- Node / Expo (app/) ----
+node_modules/
+.expo/
+.expo-shared/
+dist/
+web-build/
+*.tsbuildinfo
+npm-debug.*
+yarn-error.*
+
+# ---- Editors / OS ----
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Docker local data (volumes are named, but ignore any stray dumps) ----
+docker/**/oradata/

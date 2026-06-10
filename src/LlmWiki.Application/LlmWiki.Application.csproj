@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Application: ports (interfaces) + use-case orchestration. Depends only on Domain. -->
+  <PropertyGroup>
+    <RootNamespace>LlmWiki.Application</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LlmWiki.Domain\LlmWiki.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

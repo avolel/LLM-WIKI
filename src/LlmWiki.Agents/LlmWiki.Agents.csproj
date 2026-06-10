@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Agents: Semantic Kernel plugins, Process Framework workflows, prompts. -->
+  <PropertyGroup>
+    <RootNamespace>LlmWiki.Agents</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LlmWiki.Application\LlmWiki.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SemanticKernel" />
+    <PackageReference Include="Microsoft.SemanticKernel.Process.Core" />
+    <PackageReference Include="Microsoft.SemanticKernel.Process.LocalRuntime" />
+  </ItemGroup>
+
+</Project>

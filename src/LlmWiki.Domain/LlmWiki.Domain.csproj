@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Domain: the inner ring. No external dependencies (NFR-07). -->
+  <PropertyGroup>
+    <RootNamespace>LlmWiki.Domain</RootNamespace>
+  </PropertyGroup>
+
+</Project>
