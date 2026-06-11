@@ -83,3 +83,6 @@ Save implementation plans as markdown in [docs/plans/](docs/plans/), following t
 **Claude is NEVER allowed to commit to this repository.**
 
 Claude may stage files and draft a commit message, but must stop there. The human reviews the staged changes and runs `git commit` manually.
+
+## Working agreement
+When proposing a plan or a change set, always list every new/updated file and include the full code to be added/changed, so it can be reviewed before implementation.
