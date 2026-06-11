@@ -74,6 +74,10 @@ Phase 0 only proves connectivity. Adapters not yet needed (`OracleProjectReposit
 - Oracle `VECTOR` columns and Oracle Text indexes are **Phase 4**; [docker/oracle/spike-vector.sql](docker/oracle/spike-vector.sql) is a manual spike to validate them, not wired into the app.
 - Never commit secrets — Gitleaks gates CI and `env/.env` is gitignored.
 
+## Plans
+
+Save implementation plans as markdown in [docs/plans/](docs/plans/), following the existing [plan-phase-0.md](docs/plans/plan-phase-0.md) (e.g. `plan-phase-1.md`). Record cross-cutting architecture decisions as ADRs in [docs/adr/](docs/adr/).
+
 ## Git Policy
 
 **Claude is NEVER allowed to commit to this repository.**
