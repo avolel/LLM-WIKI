@@ -3,7 +3,8 @@
 A wiki whose content is stored in Oracle, embedded for semantic search, and authored/served with
 the help of LLM agents. This repository is the **Phase 0** skeleton: buildable, connectable
 infrastructure and the canonical layout that feature phases (1–8) drop into. See
-[docs/plans/plan-phase-0.md](docs/plans/plan-phase-0.md).
+[docs/plans/plan-phase-0.md](docs/plans/plan-phase-0.md) and the foundational decisions in
+[docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md).
 
 ## Layout
 
@@ -51,12 +52,15 @@ dotnet test  LlmWiki.slnx
 
 # 4. Run the Phase 0 acceptance checks (Oracle CREATE TABLE, 768-dim embedding, chat reply)
 dotnet run --project src/LlmWiki.Cli -- doctor
-#   or start the API and GET /diagnostics:
+#   or start the API and hit its endpoints:
 dotnet run --project src/LlmWiki.Api          # http://localhost:5080
-#   curl http://localhost:5080/diagnostics
+#   curl http://localhost:5080/health         # liveness probe
+#   curl http://localhost:5080/diagnostics    # the three checks
 
 # 5. Run the Expo client
 cd app && npm install && npm run web          # also: npm run ios / npm run android
+npm run lint                                  # typecheck (tsc --noEmit; there is no ESLint)
+npm run export:web                            # build the web bundle (CI gate)
 ```
 
 ## Configuration
@@ -80,6 +84,16 @@ report pass/fail per check:
 1. **Oracle** — connect and run a `CREATE TABLE` / `DROP` round-trip.
 2. **Embedding** — embed a probe string and assert the vector length is 768.
 3. **Chat** — a hosted chat round-trip returns non-empty text.
+
+The API also exposes `GET /health`, a dependency-free liveness probe that returns `{ "status": "ok" }`.
+
+## Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs three jobs on every push:
+
+1. **.NET build + test** — `dotnet build`/`dotnet test` in Release.
+2. **Expo app build + lint** — `npm run lint` (typecheck) and `npm run export:web`.
+3. **Secret scan** — Gitleaks fails the build on any committed credential.
 
 ## Deferrals
 
