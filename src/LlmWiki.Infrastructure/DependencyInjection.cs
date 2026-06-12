@@ -39,6 +39,10 @@ public static class DependencyInjection
         // File store (stub until Phase 2).
         services.AddSingleton<IWikiFileStore, FileSystemWikiFileStore>();
 
+        // Phase 1: real file store + wiki-aware repository.
+        services.AddSingleton<IWikiFileStore, FileSystemWikiFileStore>();
+        services.AddSingleton<IWikiRepository, FileSystemWikiRepository>();
+
         // Diagnostics orchestrator — asserts the embedding dimension from config.
         services.AddSingleton<IDiagnosticsService>(sp => new DiagnosticsService(
             sp.GetRequiredService<IDatabaseHealthCheck>(),

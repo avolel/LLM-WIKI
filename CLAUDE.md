@@ -86,3 +86,5 @@ Claude may stage files and draft a commit message, but must stop there. The huma
 
 ## Working agreement
 When proposing a plan or a change set, always list every new/updated file and include the full code to be added/changed, so it can be reviewed before implementation.
+
+IWikiFileStore/FileSystemWikiFileStore is now implemented (Phase 1), and IWikiRepository/FileSystemWikiRepository is the new wiki-aware port. Note WIKI_ROOT config and the new YamlDotNet dependency.

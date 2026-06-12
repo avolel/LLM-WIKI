@@ -21,6 +21,7 @@ public static class LlmWikiConfiguration
         ["CHAT_MODEL"] = $"{ChatOptions.SectionName}:{nameof(ChatOptions.Model)}",
         ["OPENAI_API_KEY"] = $"{ChatOptions.SectionName}:{nameof(ChatOptions.OpenAiApiKey)}",
         ["ANTHROPIC_API_KEY"] = $"{ChatOptions.SectionName}:{nameof(ChatOptions.AnthropicApiKey)}",
+        ["WIKI_ROOT"] = $"{WikiOptions.SectionName}:{nameof(WikiOptions.RootPath)}",
     };
 
     /// <summary>
@@ -60,6 +61,7 @@ public static class LlmWikiConfiguration
         services.Configure<OracleOptions>(configuration.GetSection(OracleOptions.SectionName));
         services.Configure<EmbeddingOptions>(configuration.GetSection(EmbeddingOptions.SectionName));
         services.Configure<ChatOptions>(configuration.GetSection(ChatOptions.SectionName));
+        services.Configure<WikiOptions>(configuration.GetSection(WikiOptions.SectionName));
         return services;
     }
 }

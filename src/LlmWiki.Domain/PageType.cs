@@ -1,10 +1,10 @@
 namespace LlmWiki.Domain;
 
-/// <summary>Classifies a <see cref="WikiPage"/>. Expanded in later phases.</summary>
+/// <summary>Classifies a <see cref="WikiPage"/> per the BR-003 frontmatter taxonomy.</summary>
 public enum PageType
 {
-    Article,
-    Reference,
-    Note,
-    Generated
+    Summary,
+    Entity,
+    Concept,
+    Overview
 }

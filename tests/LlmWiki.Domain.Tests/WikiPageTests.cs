@@ -5,12 +5,14 @@ namespace LlmWiki.Domain.Tests;
 public class WikiPageTests
 {
     [Fact]
-    public void NewPage_GetsIdAndDefaultsToArticle()
+    public void NewPage_GetsIdAndDefaultsToSummary()
     {
         var page = new WikiPage { Title = "Hello" };
 
         Assert.NotEqual(Guid.Empty, page.Id);
         Assert.Equal("Hello", page.Title);
-        Assert.Equal(PageType.Article, page.Type);
+        Assert.Equal(PageType.Summary, page.Type);
+        Assert.Empty(page.Tags);
+        Assert.Empty(page.Sources);
     }
 }

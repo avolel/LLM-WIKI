@@ -1,9 +1,8 @@
 namespace LlmWiki.Domain;
 
 /// <summary>
-/// Placeholder domain entity for Phase 0. A wiki page is the core unit the system
-/// stores, embeds and serves. Fields here are intentionally minimal; the full model
-/// (revisions, links, project association, embeddings metadata) lands in later phases.
+/// A markdown wiki page: YAML frontmatter (BR-003) plus a markdown body. Identified on disk
+/// by its relative path within a wiki; persisted to Oracle in later phases.
 /// </summary>
 public sealed class WikiPage
 {
@@ -11,9 +10,13 @@ public sealed class WikiPage
 
     public required string Title { get; init; }
 
+    public PageType Type { get; init; } = PageType.Summary;
+
     public string Content { get; init; } = string.Empty;
 
-    public PageType Type { get; init; } = PageType.Article;
+    public IReadOnlyList<string> Tags { get; init; } = [];
+
+    public IReadOnlyList<string> Sources { get; init; } = [];
 
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 
