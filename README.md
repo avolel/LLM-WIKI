@@ -1,9 +1,12 @@
 # Database-Driven LLM Wiki
 
 A wiki whose content is stored in Oracle, embedded for semantic search, and authored/served with
-the help of LLM agents. This repository is the **Phase 0** skeleton: buildable, connectable
-infrastructure and the canonical layout that feature phases (1–8) drop into. See
-[docs/plans/plan-phase-0.md](docs/plans/plan-phase-0.md) and the foundational decisions in
+the help of LLM agents. **Phase 0** established the buildable, connectable foundation and the
+canonical layout that feature phases (1–8) drop into; **Phase 1** has landed a real, file-backed
+wiki — typed directories, YAML frontmatter, cross-references, and a CLI to scaffold and inspect
+wikis. Oracle and embeddings remain the diagnostics path until the persistence phases. See
+[docs/plans/plan-phase-0.md](docs/plans/plan-phase-0.md),
+[docs/plans/plan-phase-1.md](docs/plans/plan-phase-1.md), and the foundational decisions in
 [docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md).
 
 ## Layout
@@ -63,11 +66,37 @@ npm run lint                                  # typecheck (tsc --noEmit; there i
 npm run export:web                            # build the web bundle (CI gate)
 ```
 
+## Wiki (Phase 1)
+
+Wikis are plain directories under `WIKI_ROOT` (default `wiki/`). Each wiki has fixed typed
+directories — `summaries/`, `entities/`, `topics/`, `raw/` (BR-001) — and a `SCHEMA.md` that records
+its conventions (link style + frontmatter field set, BR-002/005). Pages are markdown with YAML
+frontmatter (`title`, `type`, `created`, `updated`, `tags`, `sources`, BR-003); `type` is one of
+`Summary`, `Entity`, `Concept`, `Overview`. Cross-references use either `[[Wikilink]]` or markdown
+`[text](path.md)` style per the wiki's schema (BR-004), and can be resolved to flag broken links.
+
+The `LlmWiki.Cli` exposes this surface:
+
+```bash
+# Scaffold / inspect wikis
+dotnet run --project src/LlmWiki.Cli -- wiki create my-wiki --link-style Wikilink
+dotnet run --project src/LlmWiki.Cli -- wiki list
+dotnet run --project src/LlmWiki.Cli -- wiki inspect my-wiki        # schema + page list
+
+# Author / read pages (frontmatter is written for you)
+dotnet run --project src/LlmWiki.Cli -- wiki page add my-wiki entities/acme-corp.md \
+    --title "Acme Corp" --type Entity --tag company --tag customer --body "..."
+dotnet run --project src/LlmWiki.Cli -- wiki page show my-wiki entities/acme-corp.md   # prints + resolves links
+```
+
+`--body-file` reads the page body from a file; `--tag`/`--source` are repeatable.
+
 ## Configuration
 
 All secrets live in `env/.env` (gitignored); `env/.env.example` documents every key with
 placeholders. The .NET hosts load `env/.env` at startup and bind strongly-typed options
-(`OracleOptions`, `EmbeddingOptions`, `ChatOptions`) in `LlmWiki.Shared`. The Expo app reads
+(`OracleOptions`, `EmbeddingOptions`, `ChatOptions`, `WikiOptions`) in `LlmWiki.Shared`. The
+file-backed wiki lives under `WIKI_ROOT` (default `wiki/`). The Expo app reads
 `EXPO_PUBLIC_API_BASE_URL` (see `app/.env.example`).
 
 ### Chat provider
@@ -97,10 +126,12 @@ The API also exposes `GET /health`, a dependency-free liveness probe that return
 
 ## Deferrals
 
-Oracle `VECTOR` columns and Oracle Text indexes are **Phase 4**; Phase 0 only proves basic
-connectivity. `docker/oracle/spike-vector.sql` is a manual spike (R-02) to validate `VECTOR` DML +
-Oracle Text before the Phase 4 adapter is built. Port implementations in `Infrastructure` are stubs
-that throw `NotImplementedException` except the embedding/chat/Oracle paths exercised by diagnostics.
+Oracle `VECTOR` columns and Oracle Text indexes are **Phase 4**; the wiki currently persists to the
+local file store, not the database. `docker/oracle/spike-vector.sql` is a manual spike (R-02) to
+validate `VECTOR` DML + Oracle Text before the Phase 4 adapter is built. The Oracle persistence
+adapters (`OracleProjectRepository`, `OracleVectorStore`) remain stubs that throw
+`NotImplementedException`; the embedding/chat/Oracle-health paths exercised by diagnostics and the
+file-backed wiki store/repository are real.
 
 > Note: the .NET 10 SDK emits a solution as `LlmWiki.slnx` (XML solution format). Use
 > `dotnet build LlmWiki.slnx` (or just `dotnet build`).
