@@ -30,7 +30,7 @@ services:
       timeout: 10s
       retries: 40
       start_period: 120s
-    restart: unless-stopped
+    restart: no
 
   ollama:
     # Embeddings provider for nomic-embed-text (768-dim). CPU is fine for Phase 0; GPU optional.
@@ -46,16 +46,14 @@ services:
       timeout: 10s
       retries: 10
       start_period: 10s
-    restart: unless-stopped
-    # --- GPU (optional) ---------------------------------------------------
-    # Uncomment to use an NVIDIA GPU (requires nvidia-container-toolkit):
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    restart: no
+    deploy:
+       resources:
+         reservations:
+           devices:
+             - driver: nvidia
+               count: all
+               capabilities: [gpu]
 
 volumes:
   oracle-data:
