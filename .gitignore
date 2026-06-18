@@ -34,3 +34,4 @@ Thumbs.db
 
 # ---- Docker local data (volumes are named, but ignore any stray dumps) ----
 docker/**/oradata/
+docker/.env

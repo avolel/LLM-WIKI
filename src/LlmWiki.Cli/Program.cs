@@ -94,7 +94,7 @@ static Command BuildWikiCommand()
         var name = pr.GetValue(inspectName)!;
         if (!await repo.WikiExistsAsync(name, ct))
         {
-            Console.Error.WriteLine($"Wiki '{name}' not found.");
+            await Console.Error.WriteLineAsync($"Wiki '{name}' not found.");
             return 1;
         }
         var schema = await repo.ReadSchemaAsync(name, ct);
