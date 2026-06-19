@@ -18,6 +18,8 @@ root.Subcommands.Add(BuildWikiCommand());
 
 return await root.Parse(args).InvokeAsync();
 
+// Helper to build a DI provider for each command execution. 
+//In a real app, you'd likely want to optimize this (e.g. reuse providers, or at least cache singletons), but for this CLI it's simple and fast enough.
 static ServiceProvider BuildProvider()
 {
     var services = new ServiceCollection();
@@ -25,6 +27,8 @@ static ServiceProvider BuildProvider()
     return services.BuildServiceProvider();
 }
 
+// Phase 0: connectivity checks and diagnostics. 
+//This is a simple smoke test to verify that the environment is correctly configured before attempting any operations that could cause data loss (like creating wikis or writing pages).
 static async Task<int> RunDoctorAsync(CancellationToken cancellationToken)
 {
     await using var provider = BuildProvider();
@@ -42,11 +46,13 @@ static async Task<int> RunDoctorAsync(CancellationToken cancellationToken)
     return report.AllPassed ? 0 : 1;
 }
 
+// Phase 1: wiki and page management commands.
 static Command BuildWikiCommand()
 {
     var wiki = new Command("wiki", "Create, list, and inspect wikis.");
 
-    // create
+    // Create WikiSchema, which includes the wiki name and link style (e.g. wikilinks vs markdown links). 
+    // This will be stored in a SCHEMA.md file within the wiki directory and used to validate pages and resolve links.
     var createName = new Argument<string>("name") { Description = "Wiki name (directory)." };
     var linkStyle = new Option<LinkStyle>("--link-style")
     {
@@ -67,7 +73,8 @@ static Command BuildWikiCommand()
     });
     wiki.Subcommands.Add(create);
 
-    // list
+    // list all wikis, showing their name, link style, and page count. 
+    // This is a simple way to verify that the CLI can read existing wikis and their schemas.
     var list = new Command("list", "List all wikis.");
     list.SetAction(async (_, ct) =>
     {
@@ -83,7 +90,7 @@ static Command BuildWikiCommand()
     });
     wiki.Subcommands.Add(list);
 
-    // inspect
+    // inspect a wiki by name, showing its schema details and a list of its pages.
     var inspectName = new Argument<string>("name") { Description = "Wiki name." };
     var inspect = new Command("inspect", "Show a wiki's schema and pages.");
     inspect.Arguments.Add(inspectName);
@@ -151,7 +158,7 @@ static Command BuildPageCommand()
     });
     page.Subcommands.Add(add);
 
-    // show
+    // show a page's content and metadata, and resolve its links to verify that the link style is working correctly.
     var showWiki = new Argument<string>("wiki") { Description = "Wiki name." };
     var showPath = new Argument<string>("path") { Description = "Page path." };
     var show = new Command("show", "Print a page and resolve its links.");
