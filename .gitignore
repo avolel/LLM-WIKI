@@ -3,6 +3,9 @@ env/.env
 *.env.local
 **/secrets.json
 
+docs/plans/
+docs/adr/
+
 # ---- .NET ----
 bin/
 obj/
