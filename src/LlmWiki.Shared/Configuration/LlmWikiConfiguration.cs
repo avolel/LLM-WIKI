@@ -19,6 +19,7 @@ public static class LlmWikiConfiguration
         ["EMBEDDING_DIM"] = $"{EmbeddingOptions.SectionName}:{nameof(EmbeddingOptions.Dimensions)}",
         ["CHAT_PROVIDER"] = $"{ChatOptions.SectionName}:{nameof(ChatOptions.Provider)}",
         ["CHAT_MODEL"] = $"{ChatOptions.SectionName}:{nameof(ChatOptions.Model)}",
+        ["CHAT_ENDPOINT"] = $"{ChatOptions.SectionName}:{nameof(ChatOptions.Endpoint)}",
         ["OPENAI_API_KEY"] = $"{ChatOptions.SectionName}:{nameof(ChatOptions.OpenAiApiKey)}",
         ["ANTHROPIC_API_KEY"] = $"{ChatOptions.SectionName}:{nameof(ChatOptions.AnthropicApiKey)}",
         ["WIKI_ROOT"] = $"{WikiOptions.SectionName}:{nameof(WikiOptions.RootPath)}",

@@ -11,14 +11,13 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="coverlet.collector" />
+    <ProjectReference Include="..\..\src\LlmWiki.Agents\LlmWiki.Agents.csproj" />
+    <ProjectReference Include="..\..\src\LlmWiki.Infrastructure\LlmWiki.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\LlmWiki.Shared\LlmWiki.Shared.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="Xunit" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\LlmWiki.Agents\LlmWiki.Agents.csproj" />
   </ItemGroup>
 
 </Project>

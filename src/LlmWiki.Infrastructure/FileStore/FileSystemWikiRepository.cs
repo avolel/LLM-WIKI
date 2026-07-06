@@ -107,7 +107,7 @@ public sealed class FileSystemWikiRepository(IWikiFileStore files) : IWikiReposi
         }
 
         // Wikilink: match the slugified title against any page filename (without extension).
-        var slug = Slugify(target);
+        var slug = Slug.From(target);
         return pages.FirstOrDefault(p =>
             string.Equals(Path.GetFileNameWithoutExtension(p), slug, StringComparison.OrdinalIgnoreCase));
     }
@@ -123,9 +123,6 @@ public sealed class FileSystemWikiRepository(IWikiFileStore files) : IWikiReposi
         }
         return string.Join('/', parts.Reverse());
     }
-
-    public static string Slugify(string title) =>
-        string.Join('-', title.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
     private static bool IsPage(string path) =>
         path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) &&

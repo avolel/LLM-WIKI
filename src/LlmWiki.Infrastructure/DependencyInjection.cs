@@ -62,6 +62,20 @@ public static class DependencyInjection
 
     private static void AddChat(IServiceCollection services, ChatOptions options)
     {
+        // Local Ollama via its OpenAI-compatible endpoint. No API key needed (the placeholder
+        // satisfies the SK connector, which requires a non-empty key); the chat model must be
+        // pulled in Ollama beforehand.
+        if (options.IsOllama)
+        {
+            var endpoint = string.IsNullOrWhiteSpace(options.Endpoint)
+                ? "http://localhost:11434/v1/"
+                : options.Endpoint;
+
+            services.AddOpenAIChatCompletion(options.Model, new Uri(endpoint), apiKey: "ollama");
+            services.AddSingleton<IChatService, SemanticKernelChatService>();
+            return;
+        }
+
         // Default wiring: OpenAI connector. Anthropic is a drop-in via its OpenAI-compatible
         // endpoint. If no key is configured, register a fallback so the host still starts.
         if (options.IsAnthropic)

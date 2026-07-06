@@ -4,6 +4,8 @@ using LlmWiki.Application.Ports;
 using LlmWiki.Domain;
 using LlmWiki.Infrastructure;
 using LlmWiki.Shared.Configuration;
+using LlmWiki.Agents;
+using LlmWiki.Application.Ingestion;
 using Microsoft.Extensions.DependencyInjection;
 
 var root = new RootCommand("LLM Wiki CLI — local operations and diagnostics.");
@@ -16,6 +18,9 @@ root.Subcommands.Add(doctor);
 // ---- wiki (Phase 1) --------------------------------------------------------
 root.Subcommands.Add(BuildWikiCommand());
 
+// register alongside the other subcommands:
+root.Subcommands.Add(BuildIngestCommand());
+
 return await root.Parse(args).InvokeAsync();
 
 // Helper to build a DI provider for each command execution. 
@@ -24,7 +29,55 @@ static ServiceProvider BuildProvider()
 {
     var services = new ServiceCollection();
     services.AddLlmWikiInfrastructure(LlmWikiConfiguration.Build());
+    services.AddLlmWikiAgents();
     return services.BuildServiceProvider();
+}
+
+// new command builder:
+static Command BuildIngestCommand()
+{
+    var wikiArg = new Argument<string>("wiki") { Description = "Target wiki name." };
+    var fileArg = new Argument<FileInfo>("file") { Description = "Source file to ingest (markdown/text)." };
+    var ingest = new Command("ingest", "Ingest a source into a wiki: copies it into raw/ then builds pages.");
+    ingest.Arguments.Add(wikiArg);
+    ingest.Arguments.Add(fileArg);
+    ingest.SetAction(async (pr, ct) =>
+    {
+        await using var provider = BuildProvider();
+        var repo = provider.GetRequiredService<IWikiRepository>();
+        var files = provider.GetRequiredService<IWikiFileStore>();
+        var service = provider.GetRequiredService<IIngestionService>();
+
+        var wikiName = pr.GetValue(wikiArg)!;
+        if (!await repo.WikiExistsAsync(wikiName, ct))
+        {
+            await Console.Error.WriteLineAsync($"Wiki '{wikiName}' not found.");
+            return 1;
+        }
+
+        var file = pr.GetValue(fileArg)!;
+        var content = await File.ReadAllTextAsync(file.FullName, ct);
+
+        // Place the source under the immutable raw/ dir (write-once; never overwrite — NFR-02).
+        var rawPath = $"{wikiName}/raw/{file.Name}";
+        if (!await files.ExistsAsync(rawPath, ct))
+        {
+            await files.WriteAsync(rawPath, content, ct);
+        }
+
+        var report = await service.IngestAsync(wikiName, $"raw/{file.Name}", content, ct);
+
+        Console.WriteLine($"Ingested {file.Name} into '{wikiName}':");
+        foreach (var o in report.Outcomes)
+            Console.WriteLine($"  [{o.Change,-11}] {o.RelativePath}{(o.Detail is null ? "" : $" — {o.Detail}")}");
+        foreach (var c in report.Contradictions)
+            Console.WriteLine($"  [contradiction] {c.PageRelativePath}: {c.Description}");
+        foreach (var g in report.Gaps)
+            Console.WriteLine($"  [gap] {g.Subject}: {g.Detail}");
+        Console.WriteLine(report.HasFailures ? "Completed with failures." : "Done.");
+        return report.HasFailures ? 1 : 0;
+    });
+    return ingest;
 }
 
 // Phase 0: connectivity checks and diagnostics. 

@@ -1,3 +1,5 @@
+using LlmWiki.Agents.Ingestion;
+using LlmWiki.Application.Ingestion;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LlmWiki.Agents;
@@ -11,7 +13,8 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddLlmWikiAgents(this IServiceCollection services)
     {
-        // No agents registered yet — plugins/processes land in later phases.
+        // Phase 2: ingestion orchestrator (plain; SK Process Framework can replace it behind the port).
+        services.AddSingleton<IIngestionService, IngestionService>();
         return services;
     }
 }

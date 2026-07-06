@@ -4,7 +4,7 @@ namespace LlmWiki.Domain;
 /// A markdown wiki page: YAML frontmatter (BR-003) plus a markdown body. Identified on disk
 /// by its relative path within a wiki; persisted to Oracle in later phases.
 /// </summary>
-public sealed class WikiPage
+public sealed record WikiPage
 {
     public Guid Id { get; init; } = Guid.NewGuid();
 
