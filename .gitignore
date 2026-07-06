@@ -5,6 +5,7 @@ env/.env
 
 docs/plans/
 docs/adr/
+docs/
 
 # ---- .NET ----
 bin/

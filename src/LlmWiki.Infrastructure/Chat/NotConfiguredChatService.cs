@@ -9,7 +9,7 @@ namespace LlmWiki.Infrastructure.Chat;
 /// </summary>
 public sealed class NotConfiguredChatService(string provider) : IChatService
 {
-    public Task<string> CompleteAsync(string prompt, CancellationToken cancellationToken = default) =>
+    public Task<string> CompleteAsync(string prompt, bool jsonMode = false, CancellationToken cancellationToken = default) =>
         throw new InvalidOperationException(
             $"Chat provider '{provider}' has no API key configured " +
             "(set OPENAI_API_KEY or ANTHROPIC_API_KEY in env/.env).");

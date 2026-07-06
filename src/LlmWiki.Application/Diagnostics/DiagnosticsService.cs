@@ -63,7 +63,7 @@ public sealed class DiagnosticsService(
     {
         try
         {
-            var reply = await chat.CompleteAsync("Reply with the single word: ok", ct);
+            var reply = await chat.CompleteAsync("Reply with the single word: ok", jsonMode: false,  ct);
             var passed = !string.IsNullOrWhiteSpace(reply);
             var detail = passed
                 ? $"Chat replied ({reply.Trim().Length} chars)."

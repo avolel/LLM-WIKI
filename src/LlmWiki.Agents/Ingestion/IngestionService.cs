@@ -66,8 +66,8 @@ public sealed class IngestionService(
 
     private async Task<ExtractionResult> ExtractAsync(WikiSchema schema, string source, CancellationToken ct)
     {
-        var raw = await chat.CompleteAsync(IngestionPrompts.Extract(schema, source), ct);
-        return JsonSerializer.Deserialize<ExtractionResult>(StripFence(raw), Json)
+        var raw = await chat.CompleteAsync(IngestionPrompts.Extract(schema, source), jsonMode: true, ct);
+        return JsonSerializer.Deserialize<ExtractionResult>(ExtractJson(raw), Json)
                ?? throw new InvalidOperationException("Extraction returned no parseable JSON.");
     }
 
@@ -126,8 +126,8 @@ public sealed class IngestionService(
             block.AppendLine($"### {path}\n{page.Content}\n");
         }
 
-        var raw = await chat.CompleteAsync(IngestionPrompts.Reconcile(extraction.Summary, block.ToString()), ct);
-        var result = JsonSerializer.Deserialize<ReconcileResult>(StripFence(raw), Json) ?? new ReconcileResult();
+        var raw = await chat.CompleteAsync(IngestionPrompts.Reconcile(extraction.Summary, block.ToString()), jsonMode: true, ct);
+        var result = JsonSerializer.Deserialize<ReconcileResult>(ExtractJson(raw), Json) ?? new ReconcileResult();
 
         var contradictions = new List<Contradiction>();
         foreach (var c in result.Contradictions.Where(c => existing.Contains(c.Page)))
@@ -192,14 +192,25 @@ public sealed class IngestionService(
         return sb.ToString().TrimEnd();
     }
 
-    /// <summary>Tolerate models that wrap JSON in a ```json fence.</summary>
-    private static string StripFence(string s)
+    /// <summary>Recover the JSON object from a reply: strip a ```json fence, and if prose still
+    /// surrounds it, take from the first '{' to the last '}'. json_object mode makes this rare,
+    /// but local models are not perfectly obedient.</summary>
+    private static string ExtractJson(string s)
     {
         s = s.Trim();
-        if (!s.StartsWith("```")) return s;
-        var firstNl = s.IndexOf('\n');
-        var body = firstNl >= 0 ? s[(firstNl + 1)..] : s;
-        var fenceEnd = body.LastIndexOf("```", StringComparison.Ordinal);
-        return (fenceEnd >= 0 ? body[..fenceEnd] : body).Trim();
+        if (s.StartsWith("```"))
+        {
+            var firstNl = s.IndexOf('\n');
+            var body = firstNl >= 0 ? s[(firstNl + 1)..] : s;
+            var fenceEnd = body.LastIndexOf("```", StringComparison.Ordinal);
+            s = (fenceEnd >= 0 ? body[..fenceEnd] : body).Trim();
+        }
+        if (!s.StartsWith('{'))
+        {
+            var open = s.IndexOf('{');
+            var close = s.LastIndexOf('}');
+            if (open >= 0 && close > open) s = s[open..(close + 1)];
+        }
+        return s;
     }
 }

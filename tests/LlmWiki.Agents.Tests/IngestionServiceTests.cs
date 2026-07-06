@@ -95,7 +95,7 @@ public sealed class IngestionServiceTests : IDisposable
     private sealed class ScriptedChat(string extraction, string? reconcile = null) : IChatService
     {
         private int _call;
-        public Task<string> CompleteAsync(string prompt, CancellationToken cancellationToken = default)
+        public Task<string> CompleteAsync(string prompt, bool jsonMode = false, CancellationToken cancellationToken = default)
             => Task.FromResult(_call++ == 0 ? extraction : reconcile ?? "{\"contradictions\":[]}");
     }
 }

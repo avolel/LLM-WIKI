@@ -8,5 +8,5 @@ namespace LlmWiki.Application.Ports;
 public interface IChatService
 {
     /// <summary>Send a prompt and return the assistant's reply text.</summary>
-    Task<string> CompleteAsync(string prompt, CancellationToken cancellationToken = default);
+    Task<string> CompleteAsync(string prompt, bool jsonMode = false, CancellationToken cancellationToken = default);
 }

@@ -65,7 +65,7 @@ public class DiagnosticsServiceTests
 
     private sealed class FakeChat(string reply) : IChatService
     {
-        public Task<string> CompleteAsync(string prompt, CancellationToken cancellationToken = default) =>
+        public Task<string> CompleteAsync(string prompt, bool jsonMode = false, CancellationToken cancellationToken = default) =>
             Task.FromResult(reply);
     }
 }
