@@ -4,18 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A database-driven LLM wiki: content lives in Oracle, is embedded for semantic search, and is authored/served by LLM agents. This repo is the **Phase 0** skeleton — a buildable, connectable foundation with the canonical layout that feature phases (1–8) drop into. Most adapters are intentional stubs; see [docs/plans/plan-phase-0.md](docs/plans/plan-phase-0.md) and [docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md).
+A database-driven LLM wiki: content lives in Oracle, is embedded for semantic search, and is authored/served by LLM agents. The repo began as the **Phase 0** skeleton — a buildable, connectable foundation with the canonical layout that feature phases (1–8) drop into. **Phase 1** added the file-backed wiki (`IWikiRepository`) and **Phase 2** added the source-ingestion pipeline (`IIngestionService`). Remaining adapters (Oracle persistence, vector store) are intentional stubs; see [docs/plans/](docs/plans/) (`plan-phase-0.md` … `plan-phase-2.md`) and [docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md).
 
 ## Commands
 
 ```bash
 # Infrastructure (Oracle Free 23ai + Ollama) — required for diagnostics to pass
 cd docker && docker compose up -d
-docker compose exec ollama ollama pull nomic-embed-text   # one-time, 768-dim model
+docker compose exec ollama ollama pull nomic-embed-text   # one-time, 768-dim embedding model
+docker compose exec ollama ollama pull llama3.1           # one-time chat model (for CHAT_PROVIDER=ollama)
 cd ..
 
 # Secrets — env/.env is gitignored; the .NET hosts load it automatically (see DotEnvLoader)
-cp env/.env.example env/.env                              # then fill ORACLE_PWD, conn string, a chat key
+cp env/.env.example env/.env                              # fill ORACLE_PWD, conn string, and a chat provider
+                                                          # (keyless local: CHAT_PROVIDER=ollama, CHAT_MODEL=llama3.1)
 
 # .NET (note the .slnx XML solution format from the .NET 10 SDK)
 dotnet build LlmWiki.slnx
@@ -26,6 +28,11 @@ dotnet test  LlmWiki.slnx --filter "FullyQualifiedName~HealthEndpoint" # single 
 # Run the connectivity checks (Oracle round-trip, 768-dim embedding, chat reply)
 dotnet run --project src/LlmWiki.Cli -- doctor
 dotnet run --project src/LlmWiki.Api          # http://localhost:5080 → GET /health, /diagnostics
+
+# Wiki (Phase 1) + ingestion (Phase 2)
+dotnet run --project src/LlmWiki.Cli -- wiki create demo
+dotnet run --project src/LlmWiki.Cli -- ingest demo ./docs/sample-source.md   # copies to raw/, builds pages
+dotnet run --project src/LlmWiki.Cli -- wiki inspect demo
 
 # Expo client (Node 24). `lint` is a typecheck — there is no ESLint.
 cd app && npm install && npm run web          # also: npm run ios / npm run android
@@ -50,13 +57,13 @@ Domain  ←  Application (ports)  ←  Infrastructure (adapters: Oracle, Ollama,
 - **Domain** — pure entities (`WikiPage`, `PageType`). No dependencies.
 - **Application** — `Ports/` defines interfaces (`IChatService`, `IEmbeddingService`, `IDatabaseHealthCheck`, `IProjectRepository`, `IVectorStore`, `IWikiFileStore`) and `Diagnostics/` holds the orchestration that the API and CLI both call.
 - **Infrastructure** — implements every port. `AddLlmWikiInfrastructure` is the single DI entry point and **owns all SK + Oracle wiring**. Hosts never reference SK directly.
-- **Agents** — SK plugins + Process Framework workflows. `AddLlmWikiAgents` is a Phase 0 no-op; `Plugins/`, `Processes/`, `Prompts/` are empty until the agent phases.
-- **Shared** — `env/.env` loading and strongly-typed options (`OracleOptions`, `EmbeddingOptions`, `ChatOptions`).
+- **Agents** — agent orchestration. `AddLlmWikiAgents` registers `IIngestionService` (Phase 2). `Ingestion/IngestionService` is a **plain orchestrator** against the `IChatService` + `IWikiRepository` ports (no direct SK dependency) so it's unit-testable and the SK Process Framework can later replace it behind the port. `Prompts/IngestionPrompts` holds the page-type-specific extraction/reconcile prompts.
+- **Shared** — `env/.env` loading and strongly-typed options (`OracleOptions`, `EmbeddingOptions`, `ChatOptions`, `WikiOptions`).
 - **Api / Cli** — thin composition roots. The API exposes `/health` (liveness) and `/diagnostics`; the CLI exposes `doctor`. Both run the **same three checks** via `IDiagnosticsService`.
 
 ### Stub convention
 
-Phase 0 only proves connectivity. Adapters not yet needed (`OracleProjectRepository`, `OracleVectorStore`, `FileSystemWikiFileStore`) are registered in DI but **throw `NotImplementedException` with a "...not implemented until Phase N" message** so accidental use fails loudly. When implementing a later phase, fill the matching stub — don't add a parallel type. Only the embedding/chat/Oracle-health paths exercised by diagnostics are real.
+Adapters not yet needed (`OracleProjectRepository`, `OracleVectorStore`) are registered in DI but **throw `NotImplementedException` with a "...not implemented until Phase N" message** so accidental use fails loudly. When implementing a later phase, fill the matching stub — don't add a parallel type. Real today: the embedding/chat/Oracle-health diagnostics paths, the file-backed wiki store/repository (Phase 1), and the ingestion service (Phase 2). Oracle persistence and the vector store remain stubs until Phases 3/4.
 
 ### Configuration flow
 
@@ -64,7 +71,7 @@ Phase 0 only proves connectivity. Adapters not yet needed (`OracleProjectReposit
 
 ### Chat provider switch
 
-`CHAT_PROVIDER=openai` (default) wires the SK OpenAI connector. `CHAT_PROVIDER=anthropic` is a drop-in via Anthropic's OpenAI-compatible endpoint (`https://api.anthropic.com/v1/`) — set `ANTHROPIC_API_KEY` and a Claude `CHAT_MODEL`. If the selected provider's key is missing, DI registers `NotConfiguredChatService` so the host still starts (the chat diagnostic then fails cleanly). See `AddChat` in [DependencyInjection.cs](src/LlmWiki.Infrastructure/DependencyInjection.cs).
+`CHAT_PROVIDER` selects the SK connector in `AddChat` ([DependencyInjection.cs](src/LlmWiki.Infrastructure/DependencyInjection.cs)): `openai` (default) wires the SK OpenAI connector; `anthropic` is a drop-in via Anthropic's OpenAI-compatible endpoint (`https://api.anthropic.com/v1/`) — set `ANTHROPIC_API_KEY` and a Claude `CHAT_MODEL`; `ollama` is a **keyless local** option via Ollama's OpenAI-compatible endpoint (`CHAT_ENDPOINT`, default `http://localhost:11434/v1/`) — set `CHAT_MODEL` to a pulled model (e.g. `llama3.1`). For the hosted providers, if the selected provider's key is missing DI registers `NotConfiguredChatService` so the host still starts (the chat diagnostic then fails cleanly).
 
 ## Conventions
 
@@ -88,3 +95,5 @@ Claude may stage files and draft a commit message, but must stop there. The huma
 When proposing a plan or a change set, always list every new/updated file and include the full code to be added/changed, so it can be reviewed before implementation.
 
 IWikiFileStore/FileSystemWikiFileStore is now implemented (Phase 1), and IWikiRepository/FileSystemWikiRepository is the new wiki-aware port. Note WIKI_ROOT config and the new YamlDotNet dependency.
+
+Phase 2 added source ingestion: `IIngestionService` (Application `Ingestion/` port + `IngestionReport` DTOs), implemented by `LlmWiki.Agents/Ingestion/IngestionService` and driven by the CLI `ingest` command. Domain gained `Slug` (title→filename slug, lifted out of the repository) and `CrossReferenceWriter` (write-side mirror of `CrossReferenceParser`). `raw/` is immutable (NFR-02); index/log maintenance is Phase 3 and embeddings/search are Phase 4.
