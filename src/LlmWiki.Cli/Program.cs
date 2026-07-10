@@ -11,18 +11,12 @@ using Microsoft.Extensions.DependencyInjection;
 
 var root = new RootCommand("LLM Wiki CLI — local operations and diagnostics.");
 
-// ---- doctor (Phase 0) ------------------------------------------------------
 var doctor = new Command("doctor", "Run the Phase 0 connectivity checks and report pass/fail.");
 doctor.SetAction((_, ct) => RunDoctorAsync(ct));
+
 root.Subcommands.Add(doctor);
-
-// ---- wiki (Phase 1) --------------------------------------------------------
 root.Subcommands.Add(BuildWikiCommand());
-
-// register alongside the other subcommands:
 root.Subcommands.Add(BuildIngestCommand());
-
-// ---- search + reindex (Phase 4) --------------------------------------------
 root.Subcommands.Add(BuildSearchCommand());
 root.Subcommands.Add(BuildReindexCommand());
 
@@ -38,14 +32,15 @@ static ServiceProvider BuildProvider()
     return services.BuildServiceProvider();
 }
 
-// new command builder:
 static Command BuildIngestCommand()
 {
     var wikiArg = new Argument<string>("wiki") { Description = "Target wiki name." };
     var fileArg = new Argument<FileInfo>("file") { Description = "Source file to ingest (markdown/text)." };
     var ingest = new Command("ingest", "Ingest a source into a wiki: copies it into raw/ then builds pages.");
+
     ingest.Arguments.Add(wikiArg);
     ingest.Arguments.Add(fileArg);
+
     ingest.SetAction(async (pr, ct) =>
     {
         await using var provider = BuildProvider();
@@ -94,10 +89,12 @@ static Command BuildSearchCommand()
     var type = new Option<PageType?>("--type") { Description = "Restrict to a page type (entity|concept|summary|overview)." };
 
     var search = new Command("search", "Hybrid (vector + full-text) search within a wiki.");
+
     search.Arguments.Add(wikiArg);
     search.Arguments.Add(queryArg);
     search.Options.Add(topK);
     search.Options.Add(type);
+
     search.SetAction(async (pr, ct) =>
     {
         await using var provider = BuildProvider();
@@ -164,7 +161,7 @@ static async Task<int> RunDoctorAsync(CancellationToken cancellationToken)
     var diagnostics = provider.GetRequiredService<IDiagnosticsService>();
     var report = await diagnostics.RunAsync(cancellationToken);
 
-    Console.WriteLine("LLM Wiki — Phase 0 diagnostics");
+    Console.WriteLine("LLM Wiki — diagnostics");
     Console.WriteLine("------------------------------");
     foreach (var check in report.Checks)
     {
@@ -189,8 +186,10 @@ static Command BuildWikiCommand()
         DefaultValueFactory = _ => LinkStyle.Wikilink,
     };
     var create = new Command("create", "Scaffold a new wiki (typed dirs + SCHEMA.md).");
+
     create.Arguments.Add(createName);
     create.Options.Add(linkStyle);
+    
     create.SetAction(async (pr, ct) =>
     {
         await using var provider = BuildProvider();
