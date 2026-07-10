@@ -14,7 +14,8 @@ namespace LlmWiki.Agents.Ingestion;
 /// </summary>
 public sealed class IngestionService(
     IChatService chat,
-    IWikiRepository wiki) : IIngestionService
+    IWikiRepository wiki,
+    IWikiJournal journal) : IIngestionService
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
@@ -61,7 +62,38 @@ public sealed class IngestionService(
         // Light contradiction pass against existing pages we touched by name (BR-014).
         var contradictions = await ReconcileAsync(wikiName, extraction, existing, ct);
 
-        return new IngestionReport(wikiName, sourceRelativePath, outcomes, contradictions, gaps);
+        var report = new IngestionReport(wikiName, sourceRelativePath, outcomes, contradictions, gaps);
+
+        // Final steps (BR-022): regenerate the index from the freshly-written pages, then append a log
+        // entry describing the run. A journal failure is recorded on the (shared) outcomes list rather
+        // than thrown, so the wiki is never left corrupt (NFR-06).
+        try
+        {
+            await journal.RebuildIndexAsync(wikiName, ct);
+            await journal.AppendLogAsync(wikiName, BuildLogEntry(report), ct);
+        }
+        catch (Exception ex)
+        {
+            outcomes.Add(new PageOutcome("index.md", "Index/Log", PageChange.Failed, ex.Message));
+        }
+
+        return report;
+    }
+
+    private static LogEntry BuildLogEntry(IngestionReport report)
+    {
+        var created = report.Outcomes.Count(o => o.Change == PageChange.Created);
+        var updated = report.Outcomes.Count(o => o.Change == PageChange.Updated);
+        var stubs = report.Outcomes.Count(o => o.Change == PageChange.StubCreated);
+        var failed = report.Outcomes.Count(o => o.Change == PageChange.Failed);
+
+        var body = new StringBuilder();
+        body.AppendLine($"- Pages: {created} created, {updated} updated, {stubs} stub(s), {failed} failed");
+        if (report.Contradictions.Count > 0) body.AppendLine($"- Contradictions noted: {report.Contradictions.Count}");
+        if (report.Gaps.Count > 0) body.AppendLine($"- Knowledge gaps: {report.Gaps.Count}");
+
+        return new LogEntry(
+            DateOnly.FromDateTime(DateTime.UtcNow), "ingest", report.SourceRelativePath, body.ToString().TrimEnd());
     }
 
     private async Task<ExtractionResult> ExtractAsync(WikiSchema schema, string source, CancellationToken ct)

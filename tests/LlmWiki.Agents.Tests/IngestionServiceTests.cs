@@ -13,11 +13,13 @@ public sealed class IngestionServiceTests : IDisposable
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "llmwiki-ingest-tests", Guid.NewGuid().ToString("N"));
     private readonly IWikiRepository _repo;
+    private readonly IWikiJournal _journal;
 
     public IngestionServiceTests()
     {
         var files = new FileSystemWikiFileStore(Options.Create(new WikiOptions { RootPath = _root }));
         _repo = new FileSystemWikiRepository(files);
+        _journal = new FileSystemWikiJournal(_repo, files);
     }
 
     [Fact]
@@ -29,7 +31,7 @@ public sealed class IngestionServiceTests : IDisposable
              "entities":[{"name":"Acme Corp","description":"An anvil maker.","thin":false}],
              "concepts":[],"tags":["anvils"],"topicTitle":"Anvils","topicSummary":"Overview of anvils."}
             """);
-        var svc = new IngestionService(chat, _repo);
+        var svc = new IngestionService(chat, _repo, _journal);
 
         var report = await svc.IngestAsync("alpha", "raw/anvils.md", "Acme builds heavy anvils.");
 
@@ -41,6 +43,12 @@ public sealed class IngestionServiceTests : IDisposable
         var entity = await _repo.ReadPageAsync("alpha", "entities/acme-corp.md");
         Assert.Equal(PageType.Entity, entity.Type);
         Assert.Contains("raw/anvils.md", entity.Sources);
+
+        // Phase 3: the journal ran as the final step — index lists the summary page, log has an entry.
+        var index = await File.ReadAllTextAsync(Path.Combine(_root, "alpha", "index.md"));
+        Assert.Contains("Anvil Report", index);
+        var log = await File.ReadAllTextAsync(Path.Combine(_root, "alpha", "log.md"));
+        Assert.Contains("## [", log);
     }
 
     [Fact]
@@ -52,7 +60,7 @@ public sealed class IngestionServiceTests : IDisposable
              "entities":[{"name":"Wile E Coyote","description":"Mentioned once.","thin":true}],
              "concepts":[],"tags":[],"topicTitle":"","topicSummary":""}
             """);
-        var svc = new IngestionService(chat, _repo);
+        var svc = new IngestionService(chat, _repo, _journal);
 
         var report = await svc.IngestAsync("alpha", "raw/s.md", "...Wile E Coyote...");
 
@@ -76,7 +84,7 @@ public sealed class IngestionServiceTests : IDisposable
             reconcile: """
                 {"contradictions":[{"page":"entities/acme-corp.md","description":"Source says 1888; page says 1990."}]}
                 """);
-        var svc = new IngestionService(chat, _repo);
+        var svc = new IngestionService(chat, _repo, _journal);
 
         var report = await svc.IngestAsync("alpha", "raw/s2.md", "Acme was founded in 1888.");
 

@@ -43,6 +43,9 @@ public static class DependencyInjection
         services.AddSingleton<IWikiFileStore, FileSystemWikiFileStore>();
         services.AddSingleton<IWikiRepository, FileSystemWikiRepository>();
 
+        // Phase 3: agent-owned index.md / log.md journal.
+        services.AddSingleton<IWikiJournal, FileSystemWikiJournal>();
+
         // Diagnostics orchestrator — asserts the embedding dimension from config.
         services.AddSingleton<IDiagnosticsService>(sp => new DiagnosticsService(
             sp.GetRequiredService<IDatabaseHealthCheck>(),

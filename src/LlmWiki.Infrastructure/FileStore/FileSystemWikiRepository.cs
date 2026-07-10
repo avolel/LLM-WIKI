@@ -11,6 +11,8 @@ namespace LlmWiki.Infrastructure.FileStore;
 public sealed class FileSystemWikiRepository(IWikiFileStore files) : IWikiRepository
 {
     private const string SchemaFile = "SCHEMA.md";
+    private const string IndexFile = "index.md";
+    private const string LogFile = "log.md";
     private const string Keep = ".gitkeep";
 
     public async Task CreateWikiAsync(WikiSchema schema, CancellationToken cancellationToken = default)
@@ -127,5 +129,7 @@ public sealed class FileSystemWikiRepository(IWikiFileStore files) : IWikiReposi
     private static bool IsPage(string path) =>
         path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) &&
         !path.EndsWith($"/{SchemaFile}", StringComparison.Ordinal) &&
+        !path.EndsWith($"/{IndexFile}", StringComparison.Ordinal) &&
+        !path.EndsWith($"/{LogFile}", StringComparison.Ordinal) &&
         !path.Contains("/raw/", StringComparison.Ordinal);
 }
