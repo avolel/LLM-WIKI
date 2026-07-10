@@ -16,7 +16,7 @@ See
 [docs/plans/plan-phase-2.md](docs/plans/plan-phase-2.md),
 [docs/plans/plan-phase-3.md](docs/plans/plan-phase-3.md),
 [docs/plans/plan-phase-4.md](docs/plans/plan-phase-4.md), a plain-English
-[code overview for developers](docs/code-overview.md), and the foundational decisions in
+[code overview for developers](docs/code-overview/code-overview.md), and the foundational decisions in
 [docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md).
 
 ## Layout
@@ -168,6 +168,23 @@ every query — NFR-10). What text of a page is embedded is configurable via `EM
 (`TitleAndBody` default, `FullText`, or `Summary` — BR-034). Search needs Oracle up and the embedding
 model pulled; the `wiki_page` schema is created automatically on first use (canonical DDL:
 [docker/oracle/02-schema.sql](docker/oracle/02-schema.sql)).
+
+### Backfilling existing wikis — `reindex`
+
+Ingestion embeds only the pages a run **changes**, so pages authored before Phase 4 — or written
+during a run when Oracle was unreachable — are on disk but absent from `wiki_page`, and `search`
+returns "no matches" for them. `reindex` fixes that: it walks every current page of a wiki and
+embeds + upserts it, with **no LLM calls and no edits to your content** (it only rebuilds the derived
+search index). Run it once after enabling search on an existing wiki:
+
+```bash
+dotnet run --project src/LlmWiki.Cli -- reindex demo
+#   → "Reindexed 'demo': N embedded, 0 failed."
+dotnet run --project src/LlmWiki.Cli -- search demo "your query"
+```
+
+Like the ingest embed-step it is best-effort per page (a page that fails to embed is reported, not
+fatal — NFR-06), and `UpsertAsync` is keyed by `(wiki_name, path)` so re-running is idempotent.
 
 ## Configuration
 

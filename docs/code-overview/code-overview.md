@@ -3,8 +3,8 @@
 A plain-English tour of the LLM Wiki codebase for developers who are new to it but comfortable
 with C#/.NET and clean architecture. It explains **what the system does, how the pieces fit,
 and how the main flows work end to end** — enough to find your way around and make a change with
-confidence. For the "why" behind individual phases, see the [plans](plans/) and the
-[ADR](adr/0001-phase-0-foundations.md).
+confidence. For the "why" behind individual phases, see the [plans](../plans/) and the
+[ADR](../adr/0001-phase-0-foundations.md).
 
 ---
 
@@ -64,15 +64,16 @@ orchestration code only ever sees interfaces.
 
 | Port | Adapter | What it does |
 |---|---|---|
-| [`IWikiFileStore`](../src/LlmWiki.Application/Ports/IWikiFileStore.cs) | `FileSystemWikiFileStore` | Raw read/write/list of files under `WIKI_ROOT`. |
-| [`IWikiRepository`](../src/LlmWiki.Application/Ports/IWikiRepository.cs) | `FileSystemWikiRepository` | Wiki-aware operations: scaffold wikis, read/write pages with frontmatter, list, resolve links. |
-| [`IWikiJournal`](../src/LlmWiki.Application/Ports/IWikiJournal.cs) | `FileSystemWikiJournal` | Maintains `index.md` (regenerated) and `log.md` (append-only). |
-| [`IChatService`](../src/LlmWiki.Application/Ports/IChatService.cs) | `SemanticKernelChatService` / `NotConfiguredChatService` | One-shot LLM completion, optional JSON mode. |
-| [`IEmbeddingService`](../src/LlmWiki.Application/Ports/IEmbeddingService.cs) | `OllamaEmbeddingService` | Turn text into a 768-dim vector. |
-| [`IVectorStore`](../src/LlmWiki.Application/Ports/IVectorStore.cs) | `OracleVectorStore` | Upsert page embeddings + hybrid (vector + full-text) search in Oracle. |
-| [`IDatabaseHealthCheck`](../src/LlmWiki.Application/Ports/IDatabaseHealthCheck.cs) | `OracleDatabaseHealthCheck` | Connectivity probe (CREATE TABLE round-trip). |
-| [`IProjectRepository`](../src/LlmWiki.Application/Ports/IProjectRepository.cs) | `OracleProjectRepository` **(stub)** | Project/tenant persistence — throws until Phase 6. |
-| [`IIngestionService`](../src/LlmWiki.Application/Ingestion/IIngestionService.cs) | `IngestionService` (Agents) | The whole ingest pipeline. |
+| [`IWikiFileStore`](../../src/LlmWiki.Application/Ports/IWikiFileStore.cs) | `FileSystemWikiFileStore` | Raw read/write/list of files under `WIKI_ROOT`. |
+| [`IWikiRepository`](../../src/LlmWiki.Application/Ports/IWikiRepository.cs) | `FileSystemWikiRepository` | Wiki-aware operations: scaffold wikis, read/write pages with frontmatter, list, resolve links. |
+| [`IWikiJournal`](../../src/LlmWiki.Application/Ports/IWikiJournal.cs) | `FileSystemWikiJournal` | Maintains `index.md` (regenerated) and `log.md` (append-only). |
+| [`IChatService`](../../src/LlmWiki.Application/Ports/IChatService.cs) | `SemanticKernelChatService` / `NotConfiguredChatService` | One-shot LLM completion, optional JSON mode. |
+| [`IEmbeddingService`](../../src/LlmWiki.Application/Ports/IEmbeddingService.cs) | `OllamaEmbeddingService` | Turn text into a 768-dim vector. |
+| [`IVectorStore`](../../src/LlmWiki.Application/Ports/IVectorStore.cs) | `OracleVectorStore` | Upsert page embeddings + hybrid (vector + full-text) search in Oracle. |
+| [`IDatabaseHealthCheck`](../../src/LlmWiki.Application/Ports/IDatabaseHealthCheck.cs) | `OracleDatabaseHealthCheck` | Connectivity probe (CREATE TABLE round-trip). |
+| [`IProjectRepository`](../../src/LlmWiki.Application/Ports/IProjectRepository.cs) | `OracleProjectRepository` **(stub)** | Project/tenant persistence — throws until Phase 6. |
+| [`IIngestionService`](../../src/LlmWiki.Application/Ingestion/IIngestionService.cs) | `IngestionService` (Agents) | The whole ingest pipeline. |
+| [`IWikiIndexer`](../../src/LlmWiki.Application/Indexing/IWikiIndexer.cs) | `WikiIndexer` (Agents) | Backfill: embed every existing page of a wiki into the vector store. |
 
 ---
 
@@ -95,7 +96,7 @@ wiki/
 ```
 
 - The four typed directories (`summaries`, `entities`, `topics`, `raw`) are fixed for every wiki —
-  see [`WikiSchema.Directories`](../src/LlmWiki.Domain/WikiSchema.cs). (Concept pages live under
+  see [`WikiSchema.Directories`](../../src/LlmWiki.Domain/WikiSchema.cs). (Concept pages live under
   `concepts/`, created on demand.)
 - **`SCHEMA.md`** records the two per-wiki toggles: the **link style** (`[[Wikilink]]` vs.
   `[text](path.md)`) and the frontmatter field set. It's how `wiki create` and `wiki inspect` know
@@ -112,7 +113,7 @@ wiki/
 
 One table, keyed by `(wiki_name, path)` — the durable identity of a page is its **wiki + relative
 path**, *not* `WikiPage.Id` (which is regenerated on every read and never persisted). Canonical DDL:
-[docker/oracle/02-schema.sql](../docker/oracle/02-schema.sql).
+[docker/oracle/02-schema.sql](../../docker/oracle/02-schema.sql).
 
 ```sql
 wiki_page(
@@ -132,22 +133,22 @@ container), so a running app never fails just because the DDL wasn't applied by 
 
 Everything here is deterministic and dependency-free — trivial to unit-test.
 
-- [`WikiPage`](../src/LlmWiki.Domain/WikiPage.cs) — the page record: title, `PageType`, content,
+- [`WikiPage`](../../src/LlmWiki.Domain/WikiPage.cs) — the page record: title, `PageType`, content,
   tags, sources, timestamps. An immutable `record` (use `with` to edit).
-- [`PageType`](../src/LlmWiki.Domain/PageType.cs) — `Summary | Entity | Concept | Overview`.
-- [`WikiSchema`](../src/LlmWiki.Domain/WikiSchema.cs) / [`LinkStyle`](../src/LlmWiki.Domain/LinkStyle.cs)
+- [`PageType`](../../src/LlmWiki.Domain/PageType.cs) — `Summary | Entity | Concept | Overview`.
+- [`WikiSchema`](../../src/LlmWiki.Domain/WikiSchema.cs) / [`LinkStyle`](../../src/LlmWiki.Domain/LinkStyle.cs)
   — the per-wiki conventions.
-- [`Slug`](../src/LlmWiki.Domain/Slug.cs) — `"Acme Corp" → "acme-corp"`. The single source of truth
+- [`Slug`](../../src/LlmWiki.Domain/Slug.cs) — `"Acme Corp" → "acme-corp"`. The single source of truth
   for turning a title into a filename, so the repository and the agent produce **matching** paths.
-- [`CrossReference`](../src/LlmWiki.Domain/CrossReference.cs) — parses links out of a body
+- [`CrossReference`](../../src/LlmWiki.Domain/CrossReference.cs) — parses links out of a body
   (`CrossReferenceParser`, regex-based, per link style) and models link-resolution results;
-  [`CrossReferenceWriter`](../src/LlmWiki.Domain/CrossReferenceWriter.cs) is the write-side mirror
+  [`CrossReferenceWriter`](../../src/LlmWiki.Domain/CrossReferenceWriter.cs) is the write-side mirror
   (render a link in the right style).
-- [`IndexRenderer`](../src/LlmWiki.Domain/IndexRenderer.cs) + `IndexEntry` — render `index.md`:
+- [`IndexRenderer`](../../src/LlmWiki.Domain/IndexRenderer.cs) + `IndexEntry` — render `index.md`:
   fixed section order (Sources / Entities / Concepts / Overviews), empty sections omitted, entries
   **stably sorted by path** so the file is deterministic (clean git diffs; a deleted page's line
   just vanishes on the next rebuild — BR-024).
-- [`LogEntry` + `LogFormatter`](../src/LlmWiki.Domain/LogEntry.cs) — format one greppable
+- [`LogEntry` + `LogFormatter`](../../src/LlmWiki.Domain/LogEntry.cs) — format one greppable
   `## [YYYY-MM-DD] ingest | <source>` log block.
 
 The pattern to notice: **pure rendering/parsing logic lives in Domain; the file I/O that feeds it
@@ -162,21 +163,21 @@ Config is deliberately boring and centralized. Flow:
 
 1. **`env/.env`** (gitignored; template is `env/.env.example`) holds flat keys like
    `ORACLE_CONNECTION_STRING`, `CHAT_PROVIDER`, `EMBEDDING_STRATEGY`.
-2. [`DotEnvLoader`](../src/LlmWiki.Shared/Configuration/DotEnvLoader.cs) walks up from the working
+2. [`DotEnvLoader`](../../src/LlmWiki.Shared/Configuration/DotEnvLoader.cs) walks up from the working
    directory to find `env/.env` and loads it into process environment variables (no-ops if absent,
    so CI can supply vars directly).
-3. [`LlmWikiConfiguration`](../src/LlmWiki.Shared/Configuration/LlmWikiConfiguration.cs) maps each
+3. [`LlmWikiConfiguration`](../../src/LlmWiki.Shared/Configuration/LlmWikiConfiguration.cs) maps each
    flat name to a bindable `Section:Key` path (its `EnvToConfigKey` dictionary) and registers the
    strongly-typed options objects.
-4. Options classes ([`OracleOptions`](../src/LlmWiki.Shared/Configuration/OracleOptions.cs),
-   [`EmbeddingOptions`](../src/LlmWiki.Shared/Configuration/EmbeddingOptions.cs),
-   [`ChatOptions`](../src/LlmWiki.Shared/Configuration/ChatOptions.cs),
-   [`WikiOptions`](../src/LlmWiki.Shared/Configuration/WikiOptions.cs)) are injected as
+4. Options classes ([`OracleOptions`](../../src/LlmWiki.Shared/Configuration/OracleOptions.cs),
+   [`EmbeddingOptions`](../../src/LlmWiki.Shared/Configuration/EmbeddingOptions.cs),
+   [`ChatOptions`](../../src/LlmWiki.Shared/Configuration/ChatOptions.cs),
+   [`WikiOptions`](../../src/LlmWiki.Shared/Configuration/WikiOptions.cs)) are injected as
    `IOptions<T>`.
 
 The API host calls `builder.Configuration.AddLlmWikiEnv()`; the CLI calls
 `LlmWikiConfiguration.Build()`. Both then call
-[`AddLlmWikiInfrastructure`](../src/LlmWiki.Infrastructure/DependencyInjection.cs) (wires every
+[`AddLlmWikiInfrastructure`](../../src/LlmWiki.Infrastructure/DependencyInjection.cs) (wires every
 adapter + owns SK/Oracle) and `AddLlmWikiAgents` (wires the ingestion service).
 
 > **To add a new setting:** add it in three places — `env/.env.example`, the options class, and the
@@ -202,7 +203,7 @@ still starts, and the chat *diagnostic* fails cleanly rather than the whole proc
 ### 6a. Diagnostics — `doctor` / `GET /diagnostics`
 
 The cheapest way to know your environment is wired correctly. Both hosts call the same
-[`DiagnosticsService`](../src/LlmWiki.Application/Diagnostics/DiagnosticsService.cs), which runs
+[`DiagnosticsService`](../../src/LlmWiki.Application/Diagnostics/DiagnosticsService.cs), which runs
 three **independent** checks (one failing never masks the others):
 
 1. **Oracle** — connect and do a `CREATE TABLE` / `DROP` round-trip.
@@ -214,18 +215,18 @@ The API returns `200` if all pass, `503` otherwise; the CLI prints a PASS/FAIL t
 
 ### 6b. Create a wiki — `wiki create <name>`
 
-[`FileSystemWikiRepository.CreateWikiAsync`](../src/LlmWiki.Infrastructure/FileStore/FileSystemWikiRepository.cs)
+[`FileSystemWikiRepository.CreateWikiAsync`](../../src/LlmWiki.Infrastructure/FileStore/FileSystemWikiRepository.cs)
 refuses if the wiki exists, then writes a `.gitkeep` into each typed directory and renders
 `SCHEMA.md`. That's it — a wiki is a directory with a schema file.
 
 ### 6c. Ingest a source — `ingest <wiki> <file>` (Phases 2–4 together)
 
 This is the heart of the system. The CLI copies the file into `raw/` (write-once), then calls
-[`IngestionService.IngestAsync`](../src/LlmWiki.Agents/Ingestion/IngestionService.cs). Steps:
+[`IngestionService.IngestAsync`](../../src/LlmWiki.Agents/Ingestion/IngestionService.cs). Steps:
 
 1. **Load context** — read the wiki's `SCHEMA.md` and the list of existing pages.
 2. **Extract (LLM call #1)** — one structured, JSON-mode call
-   ([`IngestionPrompts.Extract`](../src/LlmWiki.Agents/Prompts/IngestionPrompts.cs)) turns the raw
+   ([`IngestionPrompts.Extract`](../../src/LlmWiki.Agents/Prompts/IngestionPrompts.cs)) turns the raw
    source into an `ExtractionResult`: a source title, summary, key points, entities, concepts,
    tags, and an overarching topic. **Only facts present in the source** — no invention.
 3. **Write the summary page** — one `summaries/<slug>.md` per source.
@@ -245,7 +246,7 @@ This is the heart of the system. The CLI copies the file into `raw/` (write-once
 9. **Embed-on-change (Phase 4), as a final step** — embed **only the pages this run changed**
    (the `Created/Updated/StubCreated` outcomes ∪ any contradiction-noted page) and upsert each into
    Oracle. What text is embedded is chosen by `EMBEDDING_STRATEGY` via
-   [`EmbeddingText`](../src/LlmWiki.Agents/Ingestion/EmbeddingText.cs).
+   [`EmbeddingText`](../../src/LlmWiki.Agents/Ingestion/EmbeddingText.cs).
 
 **Two things to internalize about this pipeline:**
 
@@ -261,7 +262,7 @@ This is the heart of the system. The CLI copies the file into `raw/` (write-once
 ### 6d. Search — `search <wiki> <query> [--top-k] [--type]` (Phase 4)
 
 1. The CLI embeds the query text with the same `IEmbeddingService` used at ingest time.
-2. [`OracleVectorStore.SearchAsync`](../src/LlmWiki.Infrastructure/VectorStore/OracleVectorStore.cs)
+2. [`OracleVectorStore.SearchAsync`](../../src/LlmWiki.Infrastructure/VectorStore/OracleVectorStore.cs)
    runs **two arms** inside one wiki (scoped by a `wiki_name` predicate — searches never cross
    wikis, NFR-10):
    - **Semantic arm** — `VECTOR_DISTANCE(emb, :query, COSINE)`, ascending (closest first). Finds the
@@ -277,6 +278,22 @@ This is the heart of the system. The CLI copies the file into `raw/` (write-once
 There's deliberately **no vector index** yet — an exact cosine scan is correct and fast at the
 target corpus size (hundreds of pages). The DDL documents the `CREATE VECTOR INDEX` line for the
 scale path.
+
+### 6e. Backfill — `reindex <wiki>` (Phase 4)
+
+Because ingestion only embeds the pages a run *changes*, pages that predate Phase 4 — or that were
+written while Oracle was unreachable (the embed step is best-effort) — exist on disk but are absent
+from `wiki_page`, so `search` can't find them. `reindex` closes that gap:
+[`WikiIndexer.ReindexAsync`](../../src/LlmWiki.Agents/Indexing/WikiIndexer.cs) lists every current
+page of a wiki, embeds it (same `EmbeddingText` strategy as ingest), and upserts it — **no LLM
+calls, no content edits**, just a rebuild of the derived index. It reuses the exact ports the ingest
+embed-step uses, is best-effort per page (a failure is reported in the `ReindexReport`, not thrown),
+and is idempotent because `UpsertAsync` is keyed by `(wiki_name, path)`.
+
+This deliberately stays a *separate* path from `IngestionService`'s inline embed loop: ingestion
+records embed failures into its `IngestionReport`, the indexer into a `ReindexReport`. They share
+`EmbeddingText` but not the loop, to avoid coupling a backfill to the ingest pipeline — a candidate
+for later DRY-ing if it earns its keep.
 
 ---
 
@@ -348,7 +365,7 @@ ports.
 - **Api tests** — host the API via `WebApplicationFactory` (`Program` is exposed `partial` for this).
 
 Run everything with `dotnet test LlmWiki.slnx`; scope to one project or filter by name as shown in
-[CLAUDE.md](../CLAUDE.md).
+[CLAUDE.md](../../CLAUDE.md).
 
 ---
 
@@ -377,6 +394,7 @@ dotnet run --project src/LlmWiki.Cli -- wiki list | inspect demo
 dotnet run --project src/LlmWiki.Cli -- wiki page add|show demo <path> …
 dotnet run --project src/LlmWiki.Cli -- ingest demo ./docs/sample-source.md
 dotnet run --project src/LlmWiki.Cli -- search demo "how the thing works" --top-k 5 --type entity
+dotnet run --project src/LlmWiki.Cli -- reindex demo          # backfill: embed all existing pages
 ```
 
 **API** — `GET /health` (liveness), `GET /diagnostics` (the three checks; 200/503).
