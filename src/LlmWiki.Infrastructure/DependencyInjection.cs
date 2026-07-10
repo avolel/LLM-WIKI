@@ -31,13 +31,12 @@ public static class DependencyInjection
         AddEmbeddings(services, embedding);
         AddChat(services, chat);
 
-        // Oracle connectivity probe (real) + persistence/vector adapters (stubs until Phase 3/4).
+        // Oracle connectivity probe (real) + project persistence (stub until Phase 3).
         services.AddSingleton<IDatabaseHealthCheck, OracleDatabaseHealthCheck>();
         services.AddSingleton<IProjectRepository, OracleProjectRepository>();
-        services.AddSingleton<IVectorStore, OracleVectorStore>();
 
-        // File store (stub until Phase 2).
-        services.AddSingleton<IWikiFileStore, FileSystemWikiFileStore>();
+        // Phase 4: real Oracle VECTOR + Oracle Text hybrid store (replaces the stub).
+        services.AddSingleton<IVectorStore, OracleVectorStore>();
 
         // Phase 1: real file store + wiki-aware repository.
         services.AddSingleton<IWikiFileStore, FileSystemWikiFileStore>();

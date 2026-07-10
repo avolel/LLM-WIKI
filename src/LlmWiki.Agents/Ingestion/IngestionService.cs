@@ -4,6 +4,8 @@ using LlmWiki.Agents.Prompts;
 using LlmWiki.Application.Ingestion;
 using LlmWiki.Application.Ports;
 using LlmWiki.Domain;
+using LlmWiki.Shared.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace LlmWiki.Agents.Ingestion;
 
@@ -15,9 +17,14 @@ namespace LlmWiki.Agents.Ingestion;
 public sealed class IngestionService(
     IChatService chat,
     IWikiRepository wiki,
-    IWikiJournal journal) : IIngestionService
+    IWikiJournal journal,
+    IEmbeddingService embeddings,
+    IVectorStore vectors,
+    IOptions<EmbeddingOptions> embedOptions) : IIngestionService
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
+
+    private readonly EmbeddingStrategy _strategy = embedOptions.Value.Strategy;
 
     public async Task<IngestionReport> IngestAsync(
         string wikiName, string sourceRelativePath, string sourceContent, CancellationToken ct = default)
@@ -77,7 +84,41 @@ public sealed class IngestionService(
             outcomes.Add(new PageOutcome("index.md", "Index/Log", PageChange.Failed, ex.Message));
         }
 
+        await EmbedChangedPagesAsync(wikiName, report, outcomes, ct);
+
         return report;
+    }
+
+    /// <summary>
+    /// Best-effort embed-on-change (BR-033): embed only the pages this run created/updated and push
+    /// them to the vector store. Contradiction notes are written outside the tracked <c>Outcomes</c>
+    /// helper, so union them in. A failure (e.g. Oracle down) is recorded as a Failed outcome, never
+    /// thrown — file-only ingestion keeps working and the wiki is never corrupted (NFR-06).
+    /// </summary>
+    private async Task EmbedChangedPagesAsync(
+        string wikiName, IngestionReport report, List<PageOutcome> outcomes, CancellationToken ct)
+    {
+        var changed = report.Outcomes
+            .Where(o => o.Change is PageChange.Created or PageChange.Updated or PageChange.StubCreated)
+            .Select(o => o.RelativePath)
+            .Concat(report.Contradictions.Select(c => c.PageRelativePath))
+            .Distinct()
+            .ToList();   // materialize: the loop below appends to `outcomes` (report.Outcomes)
+
+        foreach (var path in changed)
+        {
+            try
+            {
+                var page = await wiki.ReadPageAsync(wikiName, path, ct);
+                var text = EmbeddingText.For(page, _strategy);          // BR-034 configurable
+                var vector = await embeddings.EmbedAsync(text, ct);
+                await vectors.UpsertAsync(wikiName, path, page, vector, ct);
+            }
+            catch (Exception ex)
+            {
+                outcomes.Add(new PageOutcome(path, path, PageChange.Failed, $"embed: {ex.Message}"));
+            }
+        }
     }
 
     private static LogEntry BuildLogEntry(IngestionReport report)

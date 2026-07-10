@@ -5,6 +5,7 @@ using LlmWiki.Domain;
 using LlmWiki.Infrastructure;
 using LlmWiki.Shared.Configuration;
 using LlmWiki.Agents;
+using LlmWiki.Application.Indexing;
 using LlmWiki.Application.Ingestion;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -20,6 +21,10 @@ root.Subcommands.Add(BuildWikiCommand());
 
 // register alongside the other subcommands:
 root.Subcommands.Add(BuildIngestCommand());
+
+// ---- search + reindex (Phase 4) --------------------------------------------
+root.Subcommands.Add(BuildSearchCommand());
+root.Subcommands.Add(BuildReindexCommand());
 
 return await root.Parse(args).InvokeAsync();
 
@@ -80,7 +85,78 @@ static Command BuildIngestCommand()
     return ingest;
 }
 
-// Phase 0: connectivity checks and diagnostics. 
+// Phase 4: hybrid search — embed the query, then rank pages by fused vector + Oracle Text score.
+static Command BuildSearchCommand()
+{
+    var wikiArg = new Argument<string>("wiki") { Description = "Wiki to search." };
+    var queryArg = new Argument<string>("query") { Description = "Search text (natural language or exact term)." };
+    var topK = new Option<int>("--top-k") { Description = "Number of results.", DefaultValueFactory = _ => 5 };
+    var type = new Option<PageType?>("--type") { Description = "Restrict to a page type (entity|concept|summary|overview)." };
+
+    var search = new Command("search", "Hybrid (vector + full-text) search within a wiki.");
+    search.Arguments.Add(wikiArg);
+    search.Arguments.Add(queryArg);
+    search.Options.Add(topK);
+    search.Options.Add(type);
+    search.SetAction(async (pr, ct) =>
+    {
+        await using var provider = BuildProvider();
+        var repo = provider.GetRequiredService<IWikiRepository>();
+        var embeddings = provider.GetRequiredService<IEmbeddingService>();
+        var vectors = provider.GetRequiredService<IVectorStore>();
+
+        var wikiName = pr.GetValue(wikiArg)!;
+        if (!await repo.WikiExistsAsync(wikiName, ct))
+        {
+            await Console.Error.WriteLineAsync($"Wiki '{wikiName}' not found.");
+            return 1;
+        }
+
+        var query = pr.GetValue(queryArg)!;
+        var embedding = await embeddings.EmbedAsync(query, ct);
+        var hits = await vectors.SearchAsync(wikiName, query, embedding, pr.GetValue(topK), pr.GetValue(type), ct);
+
+        if (hits.Count == 0) { Console.WriteLine("no matches"); return 0; }
+
+        var i = 1;
+        foreach (var h in hits)
+        {
+            Console.WriteLine($"{i++}. {h.RelativePath}  {h.Score:F4}  — {h.Title} [{h.Type}]");
+        }
+        return 0;
+    });
+    return search;
+}
+
+// Phase 4: backfill — embed every existing page of a wiki into Oracle (no LLM calls, no content edits).
+static Command BuildReindexCommand()
+{
+    var wikiArg = new Argument<string>("wiki") { Description = "Wiki to (re)embed into the vector store." };
+    var reindex = new Command("reindex", "Embed all existing pages of a wiki into Oracle (backfill the search index).");
+    reindex.Arguments.Add(wikiArg);
+    reindex.SetAction(async (pr, ct) =>
+    {
+        await using var provider = BuildProvider();
+        var repo = provider.GetRequiredService<IWikiRepository>();
+        var indexer = provider.GetRequiredService<IWikiIndexer>();
+
+        var wikiName = pr.GetValue(wikiArg)!;
+        if (!await repo.WikiExistsAsync(wikiName, ct))
+        {
+            await Console.Error.WriteLineAsync($"Wiki '{wikiName}' not found.");
+            return 1;
+        }
+
+        var report = await indexer.ReindexAsync(wikiName, ct);
+        Console.WriteLine($"Reindexed '{wikiName}': {report.Embedded} embedded, {report.Failed} failed.");
+        foreach (var f in report.Failures)
+            Console.WriteLine($"  [failed] {f.RelativePath} — {f.Error}");
+        return report.HasFailures ? 1 : 0;
+    });
+    return reindex;
+}
+
+// Phase 0: connectivity checks and diagnostics.
 //This is a simple smoke test to verify that the environment is correctly configured before attempting any operations that could cause data loss (like creating wikis or writing pages).
 static async Task<int> RunDoctorAsync(CancellationToken cancellationToken)
 {

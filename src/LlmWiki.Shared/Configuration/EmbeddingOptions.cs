@@ -1,5 +1,18 @@
 namespace LlmWiki.Shared.Configuration;
 
+/// <summary>Which text of a page is fed to the embedding model (BR-034).</summary>
+public enum EmbeddingStrategy
+{
+    /// <summary>Title + full body (default): best general-purpose recall.</summary>
+    TitleAndBody,
+
+    /// <summary>Full body only.</summary>
+    FullText,
+
+    /// <summary>First paragraph only — cheaper, coarser.</summary>
+    Summary,
+}
+
 /// <summary>Embedding provider settings (Ollama nomic-embed-text, 768-dim).</summary>
 public sealed class EmbeddingOptions
 {
@@ -13,4 +26,7 @@ public sealed class EmbeddingOptions
 
     /// <summary>Expected vector dimensionality (env: EMBEDDING_DIM). Phase 0 asserts 768.</summary>
     public int Dimensions { get; set; } = 768;
+
+    /// <summary>What page text to embed (env: EMBEDDING_STRATEGY). Phase 4, BR-034.</summary>
+    public EmbeddingStrategy Strategy { get; set; } = EmbeddingStrategy.TitleAndBody;
 }

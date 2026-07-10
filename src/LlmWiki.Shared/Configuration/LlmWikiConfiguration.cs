@@ -17,6 +17,7 @@ public static class LlmWikiConfiguration
         ["OLLAMA_ENDPOINT"] = $"{EmbeddingOptions.SectionName}:{nameof(EmbeddingOptions.Endpoint)}",
         ["EMBEDDING_MODEL"] = $"{EmbeddingOptions.SectionName}:{nameof(EmbeddingOptions.Model)}",
         ["EMBEDDING_DIM"] = $"{EmbeddingOptions.SectionName}:{nameof(EmbeddingOptions.Dimensions)}",
+        ["EMBEDDING_STRATEGY"] = $"{EmbeddingOptions.SectionName}:{nameof(EmbeddingOptions.Strategy)}",
         ["CHAT_PROVIDER"] = $"{ChatOptions.SectionName}:{nameof(ChatOptions.Provider)}",
         ["CHAT_MODEL"] = $"{ChatOptions.SectionName}:{nameof(ChatOptions.Model)}",
         ["CHAT_ENDPOINT"] = $"{ChatOptions.SectionName}:{nameof(ChatOptions.Endpoint)}",

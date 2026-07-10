@@ -1,4 +1,6 @@
+using LlmWiki.Agents.Indexing;
 using LlmWiki.Agents.Ingestion;
+using LlmWiki.Application.Indexing;
 using LlmWiki.Application.Ingestion;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -15,6 +17,8 @@ public static class DependencyInjection
     {
         // Phase 2: ingestion orchestrator (plain; SK Process Framework can replace it behind the port).
         services.AddSingleton<IIngestionService, IngestionService>();
+        // Phase 4: backfill indexer — embed all existing pages of a wiki into the vector store.
+        services.AddSingleton<IWikiIndexer, WikiIndexer>();
         return services;
     }
 }
