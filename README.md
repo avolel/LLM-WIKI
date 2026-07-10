@@ -6,11 +6,17 @@ canonical layout that feature phases (1–8) drop into; **Phase 1** landed a rea
 wiki — typed directories, YAML frontmatter, cross-references, and a CLI to scaffold and inspect
 wikis; **Phase 2** makes the wiki *grow from sources* — drop a source into a wiki's `raw/` and an
 LLM agent extracts entities/concepts, writes a summary, creates/updates entity, concept and topic
-pages, and notes contradictions. Oracle and embeddings remain the diagnostics path until the
-persistence phases. See
+pages, and notes contradictions; **Phase 3** adds the agent-owned journal — every ingest
+regenerates an `index.md` catalogue and appends to a `log.md` history; and **Phase 4** makes
+the wiki *searchable* — each changed page is embedded into Oracle (768-dim `VECTOR` + Oracle Text)
+and a CLI `search` command ranks pages by a hybrid of semantic similarity and full-text matching.
+See
 [docs/plans/plan-phase-0.md](docs/plans/plan-phase-0.md),
 [docs/plans/plan-phase-1.md](docs/plans/plan-phase-1.md),
-[docs/plans/plan-phase-2.md](docs/plans/plan-phase-2.md), and the foundational decisions in
+[docs/plans/plan-phase-2.md](docs/plans/plan-phase-2.md),
+[docs/plans/plan-phase-3.md](docs/plans/plan-phase-3.md),
+[docs/plans/plan-phase-4.md](docs/plans/plan-phase-4.md), a plain-English
+[code overview for developers](docs/code-overview.md), and the foundational decisions in
 [docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md).
 
 ## Layout
@@ -107,7 +113,8 @@ and topic pages (appending provenance to existing pages rather than overwriting)
 mentioned-in-passing items, and runs a light contradiction pass against existing pages it matched by
 name — noting any conflict inline instead of overwriting. Each page write is an independent boundary,
 so a single failure is recorded, not fatal (NFR-06); the run returns a structured `IngestionReport`
-the CLI prints (and Phase 3 will turn into index/log updates).
+the CLI prints. As its **final steps** it updates the journal (Phase 3) and embeds the pages it
+changed (Phase 4).
 
 ```bash
 dotnet run --project src/LlmWiki.Cli -- wiki create demo
@@ -117,16 +124,60 @@ dotnet run --project src/LlmWiki.Cli -- wiki inspect demo   # see the new pages 
 ```
 
 Ingestion needs a working chat provider (see below) — with a local Ollama model it runs fully
-offline. It does **not** use embeddings or Oracle; index/log maintenance is Phase 3 and semantic
-search is Phase 4.
+offline. The journal step is file-only; the embedding step is **best-effort** — if Oracle/Ollama
+are down the pages are still written and the failure is recorded, not thrown (NFR-06).
+
+## Journal — index & log (Phase 3)
+
+Each wiki carries two **agent-owned** files at its root, next to `SCHEMA.md`, maintained as the
+final step of every ingest (BR-020…024):
+
+- **`index.md`** — a catalogue of every content page, grouped into Sources / Entities / Concepts /
+  Overviews, each entry a link + a one-line summary + `(created; N source(s))`. It is
+  **regenerated deterministically** from disk on each ingest — stably sorted with no timestamp — so
+  git diffs stay clean and a deleted page's entry simply disappears on the next rebuild (BR-024).
+- **`log.md`** — an append-only history; each run adds a greppable
+  `## [YYYY-MM-DD] ingest | <source>` heading with a bullet summary of what changed (created /
+  updated / stub / failed counts, plus contradictions and gaps). A partial/failed ingest is logged
+  too.
+
+These two files are not content pages: they're excluded from `wiki inspect`, page counts, the
+catalogue itself, and link resolution. View them by opening the files (there are no dedicated CLI
+view commands). A journal failure is recorded on the report as a `Failed` outcome, never fatal
+(NFR-06).
+
+## Search (Phase 4)
+
+Ingestion embeds **only the pages a run changed** — the ones the `IngestionReport` marked
+created/updated/stubbed, plus any page that got a contradiction note (BR-033) — and upserts each
+into Oracle: one `wiki_page` row per page with a 768-dim `VECTOR(768, FLOAT32)` embedding, an
+Oracle Text index over the body, and metadata (title, type, tags, snippet). The `search` command
+then answers **hybrid** queries within a wiki:
+
+```bash
+# Paraphrase → semantic (vector) arm finds the right page even when words don't match a title
+dotnet run --project src/LlmWiki.Cli -- search demo "how the thing actually works" --top-k 5
+
+# Exact name/term → full-text (Oracle Text) arm returns its page; optional page-type filter
+dotnet run --project src/LlmWiki.Cli -- search demo "AcmeCorp" --type entity
+```
+
+Both arms run and their rankings are combined by **reciprocal-rank fusion**, so semantic recall and
+exact-term precision reinforce each other. Searches never cross wikis (a `wiki_name` predicate scopes
+every query — NFR-10). What text of a page is embedded is configurable via `EMBEDDING_STRATEGY`
+(`TitleAndBody` default, `FullText`, or `Summary` — BR-034). Search needs Oracle up and the embedding
+model pulled; the `wiki_page` schema is created automatically on first use (canonical DDL:
+[docker/oracle/02-schema.sql](docker/oracle/02-schema.sql)).
 
 ## Configuration
 
 All secrets live in `env/.env` (gitignored); `env/.env.example` documents every key with
 placeholders. The .NET hosts load `env/.env` at startup and bind strongly-typed options
 (`OracleOptions`, `EmbeddingOptions`, `ChatOptions`, `WikiOptions`) in `LlmWiki.Shared`. The
-file-backed wiki lives under `WIKI_ROOT` (default `wiki/`). The Expo app reads
-`EXPO_PUBLIC_API_BASE_URL` (see `app/.env.example`).
+file-backed wiki lives under `WIKI_ROOT` (default `wiki/`); `ORACLE_CONNECTION_STRING` points the
+Phase 4 vector store at Oracle; `EMBEDDING_STRATEGY` (`TitleAndBody` | `FullText` | `Summary`)
+chooses what page text is embedded. The Expo app reads `EXPO_PUBLIC_API_BASE_URL` (see
+`app/.env.example`).
 
 ### Chat provider
 
@@ -164,12 +215,15 @@ The API also exposes `GET /health`, a dependency-free liveness probe that return
 
 ## Deferrals
 
-Oracle `VECTOR` columns and Oracle Text indexes are **Phase 4**; the wiki currently persists to the
-local file store, not the database. `docker/oracle/spike-vector.sql` is a manual spike (R-02) to
-validate `VECTOR` DML + Oracle Text before the Phase 4 adapter is built. The Oracle persistence
-adapters (`OracleProjectRepository`, `OracleVectorStore`) remain stubs that throw
-`NotImplementedException`; the embedding/chat/Oracle-health paths exercised by diagnostics and the
-file-backed wiki store/repository are real.
+Wiki content is authored to the **file store** (`WIKI_ROOT`), which remains the source of truth;
+Oracle now holds a **derived search index** (`wiki_page`: embeddings + Oracle Text) that Phase 4
+writes on ingest. `docker/oracle/spike-vector.sql` was the manual spike (R-02) that validated
+`VECTOR` DML + Oracle Text before the real `OracleVectorStore` adapter was built.
+`OracleProjectRepository` (project/tenant persistence) is still a stub that throws
+`NotImplementedException` until Phase 6. Reading the index into query context and the log into
+session context (BR-023) is Phase 5 / Phase 8. Everything else is real: the embedding/chat/
+Oracle-health diagnostics paths, the file-backed wiki store/repository, the journal, and the
+hybrid vector store.
 
 > Note: the .NET 10 SDK emits a solution as `LlmWiki.slnx` (XML solution format). Use
 > `dotnet build LlmWiki.slnx` (or just `dotnet build`).

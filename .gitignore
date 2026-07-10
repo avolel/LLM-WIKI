@@ -3,9 +3,8 @@ env/.env
 *.env.local
 **/secrets.json
 
-docs/plans/
-docs/adr/
-docs/
+#docs/plans/
+#docs/adr/
 
 # ---- .NET ----
 bin/
