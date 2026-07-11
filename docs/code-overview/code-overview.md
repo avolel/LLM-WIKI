@@ -72,7 +72,8 @@ orchestration code only ever sees interfaces.
 | [`IEmbeddingService`](../../src/LlmWiki.Application/Ports/IEmbeddingService.cs) | `OllamaEmbeddingService` | Turn text into a 768-dim vector. |
 | [`IVectorStore`](../../src/LlmWiki.Application/Ports/IVectorStore.cs) | `OracleVectorStore` | Upsert page embeddings + hybrid (vector + full-text) search in Oracle. |
 | [`IDatabaseHealthCheck`](../../src/LlmWiki.Application/Ports/IDatabaseHealthCheck.cs) | `OracleDatabaseHealthCheck` | Connectivity probe (CREATE TABLE round-trip). |
-| [`IProjectRepository`](../../src/LlmWiki.Application/Ports/IProjectRepository.cs) | `OracleProjectRepository` **(stub)** | Project/tenant persistence — throws until Phase 6. |
+| [`IProjectRepository`](../../src/LlmWiki.Application/Ports/IProjectRepository.cs) | `OracleProjectRepository` | Project registry: register/list/get projects + record ingest metadata in Oracle `wiki_project` (Phase 6). |
+| [`ICurrentProjectStore`](../../src/LlmWiki.Application/Ports/ICurrentProjectStore.cs) | `FileCurrentProjectStore` | Host-local active-project pointer (`{WIKI_ROOT}/.current-project`) — offline, no Oracle (Phase 6). |
 | [`IIngestionService`](../../src/LlmWiki.Application/Ingestion/IIngestionService.cs) | `IngestionService` (Agents) | The whole ingest pipeline. |
 | [`IWikiIndexer`](../../src/LlmWiki.Application/Indexing/IWikiIndexer.cs) | `WikiIndexer` (Agents) | Backfill: embed every existing page of a wiki into the vector store. |
 | [`IQueryService`](../../src/LlmWiki.Application/Query/IQueryService.cs) | `QueryService` (Agents) | Query/synthesis: index → hybrid search → read candidates → cited answer; save an answer back as a page. |
@@ -364,8 +365,8 @@ Two distinct postures, by layer:
 Adapters for phases not yet built are **registered in DI but throw**
 `NotImplementedException("… not implemented until Phase N")`, so accidental use fails loudly instead
 of silently doing nothing. When you implement a later phase, you **fill the existing stub** (as
-Phase 4 did to `OracleVectorStore`) — you don't add a parallel type. Today the only remaining stub
-is `OracleProjectRepository` (Phase 6).
+Phase 4 did to `OracleVectorStore` and Phase 6 did to `OracleProjectRepository`) — you don't add a
+parallel type. No application-adapter stubs remain (Phase 7's linting/health-check is not yet wired).
 
 ### Security
 
@@ -392,7 +393,7 @@ committed credential. Options classes that hold keys are never logged.
 | 3 | Agent-owned journal: regenerated `index.md` + append-only `log.md` | ✅ real |
 | 4 | Hybrid retrieval: per-page embeddings + Oracle Text, embed-on-change, `search` CLI | ✅ real |
 | 5 | Query/synthesis: index → hybrid search → cited answer; `ask` REPL + `POST /query`; save-answer | ✅ real |
-| 6 | Project/tenant persistence (`OracleProjectRepository`) | 🔲 stub |
+| 6 | Project registry: Oracle `wiki_project` metadata, `project` CLI + `/projects` API, active-project pointer, best-effort ingest metadata | ✅ real |
 | 8 | React Native / Expo UI, token streaming, log-into-session-context (BR-023) | 🔲 skeleton in `app/` |
 
 ---

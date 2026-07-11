@@ -13,16 +13,22 @@ and a CLI `search` command ranks pages by a hybrid of semantic similarity and fu
 and **Phase 5** makes the wiki *answer questions* — an `ask` command (one-shot or an interactive
 follow-up REPL) and a `POST /query` HTTP endpoint read the index, run hybrid search, read the top
 pages, and synthesise a grounded, **cited** answer that honestly reports gaps — and can save a good
-answer back as a new, itself-indexed `Answer` page.
+answer back as a new, itself-indexed `Answer` page; and **Phase 6** adds a first-class **project
+registry** — an Oracle-persisted `wiki_project` table of projects + metadata (created / last-ingest /
+page & source counts), a `project` CLI group (`create`/`list`/`select`) and `GET`/`POST /projects`
+API, and a persisted "active project" so `ingest`/`search`/`ask` default to it when you omit the wiki
+name (a project *is* a wiki — isolation is unchanged, this adds the durable registry on top).
 See
 [docs/plans/plan-phase-0.md](docs/plans/plan-phase-0.md),
 [docs/plans/plan-phase-1.md](docs/plans/plan-phase-1.md),
 [docs/plans/plan-phase-2.md](docs/plans/plan-phase-2.md),
 [docs/plans/plan-phase-3.md](docs/plans/plan-phase-3.md),
 [docs/plans/plan-phase-4.md](docs/plans/plan-phase-4.md),
-[docs/plans/plan-phase-5.md](docs/plans/plan-phase-5.md), a plain-English
-[code overview for developers](docs/code-overview/code-overview.md), and the foundational decisions in
-[docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md).
+[docs/plans/plan-phase-5.md](docs/plans/plan-phase-5.md),
+[docs/plans/plan-phase-6.md](docs/plans/plan-phase-6.md), a plain-English
+[code overview for developers](docs/code-overview/code-overview.md), and the architecture decisions in
+[docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md) and
+[docs/adr/0002-phase-6-project-registry.md](docs/adr/0002-phase-6-project-registry.md).
 
 ## Layout
 
@@ -236,6 +242,47 @@ curl -s localhost:5080/query -H 'content-type: application/json' \
 `ingest`, or `reindex` an older wiki, first). `/health` and `/diagnostics` stay minimal-API — the
 query surface is a deliberate first use of MVC controllers + Swagger in this codebase.
 
+## Projects (Phase 6)
+
+A **project is a wiki** — the same named directory under `WIKI_ROOT`, already isolated per tenant by
+a `wiki_name` predicate on every search (NFR-10). Phase 6 adds a first-class, Oracle-persisted
+*registry* on top: a `wiki_project` table holding each project's `name`, `created_at`,
+`last_ingest_at`, and recomputed page/source counts (BR-050…053). The `project` CLI group manages it:
+
+```bash
+# Create: scaffolds the wiki AND registers it in Oracle, then makes it the active project
+dotnet run --project src/LlmWiki.Cli -- project create ml-papers --link-style Wikilink
+
+# List: reads the Oracle registry; the active project is marked with *
+dotnet run --project src/LlmWiki.Cli -- project list
+#   * ml-papers   created 2026-07-11  last-ingest 2026-07-11  5 page(s)  1 source(s)
+#     trains      created 2026-07-11  last-ingest never       0 page(s)  0 source(s)
+
+# Select: persists the active project (a host-local {WIKI_ROOT}/.current-project pointer)
+dotnet run --project src/LlmWiki.Cli -- project select ml-papers
+```
+
+Once a project is selected, `ingest`/`search`/`ask` **default to it** when you omit the wiki name —
+`search "anvils"` runs against the active project, while `search other-wiki "anvils"` still targets an
+explicit one:
+
+```bash
+dotnet run --project src/LlmWiki.Cli -- ingest ./notes.md        # into the active project
+dotnet run --project src/LlmWiki.Cli -- search "anvils"          # active project
+dotnet run --project src/LlmWiki.Cli -- ask                      # REPL on the active project
+```
+
+The registry is kept current **best-effort** on each ingest (a final step stamps `last_ingest_at` and
+the counts); if Oracle is down the wiki on disk is still written and the failure is recorded, never
+thrown (NFR-06) — files stay canonical, Oracle stays derived. The active-project pointer is host-local
+(a dotfile, not Oracle), so `project select` works offline. The registry is also HTTP-reachable:
+`GET /projects`, `GET /projects/{name}`, and `POST /projects {"name":"…"}` (scaffold + register → 201;
+duplicate → 409) via a `ProjectController` in Swagger. `select` has no endpoint — the active-project
+pointer is a CLI-local concept, since the API takes the project name per request. The `wiki_project`
+schema is created automatically on first use (canonical DDL:
+[docker/oracle/03-schema.sql](docker/oracle/03-schema.sql)). The file-only `wiki create` command is
+unchanged for scaffolding a wiki without registering a project.
+
 ## Configuration
 
 All secrets live in `env/.env` (gitignored); `env/.env.example` documents every key with
@@ -283,15 +330,16 @@ The API also exposes `GET /health`, a dependency-free liveness probe that return
 ## Deferrals
 
 Wiki content is authored to the **file store** (`WIKI_ROOT`), which remains the source of truth;
-Oracle now holds a **derived search index** (`wiki_page`: embeddings + Oracle Text) that Phase 4
-writes on ingest. `docker/oracle/spike-vector.sql` was the manual spike (R-02) that validated
-`VECTOR` DML + Oracle Text before the real `OracleVectorStore` adapter was built.
-`OracleProjectRepository` (project/tenant persistence) is still a stub that throws
-`NotImplementedException` until Phase 6. Phase 5 reads the index into query context; carrying the
-log into session context (BR-023), token **streaming** to the client, and the React Native chat UI
-remain Phase 8. Everything else is real: the embedding/chat/Oracle-health diagnostics paths, the
-file-backed wiki store/repository, the journal, the hybrid vector store, and the query/synthesis
-workflow (`ask` REPL + `POST /query`).
+Oracle holds **derived** state — a search index (`wiki_page`: embeddings + Oracle Text) written on
+ingest (Phase 4), and the project registry (`wiki_project`: metadata) written best-effort on ingest
+and by the `project` commands (Phase 6). `docker/oracle/spike-vector.sql` was the manual spike (R-02)
+that validated `VECTOR` DML + Oracle Text before the real `OracleVectorStore` adapter was built. No
+application-adapter stubs remain — `OracleProjectRepository` is filled (Phase 6). Phase 5 reads the
+index into query context; carrying the log into session context (BR-023), token **streaming** to the
+client, and the React Native chat UI remain Phase 8; linting / a health-check surface are Phase 7.
+Everything else is real: the embedding/chat/Oracle-health diagnostics paths, the file-backed wiki
+store/repository, the journal, the hybrid vector store, the query/synthesis workflow (`ask` REPL +
+`POST /query`), and the project registry (`project` CLI + `/projects` API).
 
 > Note: the .NET 10 SDK emits a solution as `LlmWiki.slnx` (XML solution format). Use
 > `dotnet build LlmWiki.slnx` (or just `dotnet build`).
