@@ -49,7 +49,7 @@ Domain  ←  Application (ports)  ←  Infrastructure (adapters: Oracle, Ollama,
 | **`LlmWiki.Infrastructure`** | **Adapters** — the real implementations of every port (Oracle, Ollama, OpenAI/Anthropic, file store). Owns *all* Semantic Kernel + Oracle wiring. | Application, Shared |
 | **`LlmWiki.Agents`** | LLM agent orchestration. Today: the ingestion pipeline, the backfill indexer, and the query/synthesis service — all written against ports only (no SK types) so they stay unit-testable. | Application, Shared |
 | **`LlmWiki.Shared`** | Cross-cutting config: `env/.env` loading + strongly-typed options. A leaf with no project deps. | nothing |
-| **`LlmWiki.Api`** | ASP.NET host — minimal APIs (`/health`, `/diagnostics`) **plus** the Phase 5 `POST /query` MVC controller and Swagger UI. A thin **composition root**. | Infrastructure, Agents, Shared |
+| **`LlmWiki.Api`** | ASP.NET host — minimal APIs (`/health`, `/diagnostics`) **plus** the Phase 5 `POST /query` and Phase 6 `GET`·`POST /projects` MVC controllers and Swagger UI. A thin **composition root**. | Infrastructure, Agents, Shared |
 | **`LlmWiki.Cli`** | Command-line host (`doctor`, `wiki`, `ingest`, `search`, `reindex`, `ask`). The other composition root. | Infrastructure, Agents, Shared |
 
 **Why this matters when you edit code:** if you find yourself wanting to `using Oracle.…` or
@@ -88,6 +88,7 @@ Under `WIKI_ROOT` (default `wiki/`), each wiki is a directory:
 
 ```
 wiki/
+  .current-project        # host-local active-project pointer (one line)          ── Phase 6
   demo/
     SCHEMA.md              # the wiki's conventions (link style + frontmatter fields)
     index.md              # agent-owned catalogue (regenerated every ingest)     ── Phase 3
@@ -131,6 +132,23 @@ wiki_page(
 
 The adapter **creates this schema on first use** if it's missing (init scripts only run on a fresh
 container), so a running app never fails just because the DDL wasn't applied by hand.
+
+### The Oracle project registry (Phase 6)
+
+A second, small table holds one row per project (== wiki) with just metadata — the page rows still
+live in `wiki_page`. Canonical DDL: [docker/oracle/03-schema.sql](../../docker/oracle/03-schema.sql);
+`OracleProjectRepository` ensures it idempotently on first use, exactly like `wiki_page`.
+
+```sql
+wiki_project(
+  name,                          -- primary key (the wiki/project name)
+  created_at, last_ingest_at,    -- lifecycle timestamps
+  page_count, source_count)      -- recomputed + stamped best-effort on each ingest
+```
+
+This is *derived* state: files under `WIKI_ROOT` stay canonical, and the active-project pointer
+(`.current-project`) is a host-local dotfile, not a DB row — so `project select` and offline
+scaffolding never depend on Oracle.
 
 ---
 
@@ -255,13 +273,18 @@ This is the heart of the system. The CLI copies the file into `raw/` (write-once
    (the `Created/Updated/StubCreated` outcomes ∪ any contradiction-noted page) and upsert each into
    Oracle. What text is embedded is chosen by `EMBEDDING_STRATEGY` via
    [`EmbeddingText`](../../src/LlmWiki.Agents/Ingestion/EmbeddingText.cs).
+10. **Record project metadata (Phase 6), as a final step** — `RecordProjectAsync` counts the pages on
+    disk and the sources in `raw/` (excluding the `.gitkeep`) and calls
+    `IProjectRepository.RecordIngestAsync` to stamp `last_ingest_at` + those counts on the
+    `wiki_project` row (upserting it if the project was never explicitly registered).
 
 **Two things to internalize about this pipeline:**
 
-- **Every side effect is a boundary, and steps 8–9 are best-effort.** A single page write, the
-  journal, or the embedding step can fail without taking the run down — the failure is recorded as a
-  `Failed` outcome on the report and the rest proceeds. This is NFR-06: *the wiki is never left
-  corrupt, and file-only ingestion keeps working even if Oracle/Ollama are down.*
+- **Every side effect is a boundary, and steps 8–10 are best-effort.** A single page write, the
+  journal, the embedding step, or the project-metadata step can fail without taking the run down — the
+  failure is recorded as a `Failed` outcome on the report (e.g. a `project` outcome for step 10) and
+  the rest proceeds. This is NFR-06: *the wiki is never left corrupt, and file-only ingestion keeps
+  working even if Oracle/Ollama are down.*
 - **The change set is free.** We don't hash content or add a "dirty" frontmatter field to decide
   what to re-embed — the `IngestionReport` already knows exactly which pages changed. (One subtlety
   the code calls out: contradiction notes are written *outside* the tracked outcomes list, so they
@@ -345,6 +368,36 @@ constructor-injects the ports and delegates straight to `IQueryService` (no logi
 This is the codebase's **first MVC controller and its first Swagger UI**: `Program.cs` adds
 `AddControllers()` + `AddSwaggerGen()` and maps `/swagger` in development, while `/health` and
 `/diagnostics` stay minimal-API — a deliberate mix, so the query surface is the one controller.
+
+### 6g. Projects — `project create|list|select` / `GET`·`POST /projects` (Phase 6)
+
+A **project is a wiki** — the same directory tenant, already isolated by the `wiki_name` predicate on
+every search (NFR-10). Phase 6 adds a durable *registry* of projects and their metadata plus a
+selectable "active project":
+
+- **`project create <name>`** — scaffolds the wiki (`IWikiRepository.CreateWikiAsync`, files are
+  canonical) **and** registers it in Oracle (`IProjectRepository.RegisterAsync`, best-effort — a DB
+  outage warns, never fails the scaffold), then sets it as active. `project select <name>` guards that
+  the wiki exists, persists the pointer, and best-effort registers.
+- **`project list`** — reads the `wiki_project` registry (`ListAsync`) and prints each project's
+  created / last-ingest / page & source counts, marking the active one with `*`.
+- **The active-project pointer** is host-local, not Oracle: [`ICurrentProjectStore`](../../src/LlmWiki.Application/Ports/ICurrentProjectStore.cs)
+  / `FileCurrentProjectStore` writes one line to `{WIKI_ROOT}/.current-project`, so `select` works
+  offline and never depends on the DB (files canonical, Oracle derived). `ingest`/`search`/`ask`
+  resolve the target project via a shared helper: an explicit positional wins, else the pointer, else
+  an error.
+- **CLI positional subtlety.** System.CommandLine binds a lone token to the first (optional)
+  positional, so `ingest`/`search` treat **one** positional as the payload (wiki from the pointer) and
+  **two** as an explicit `<wiki> <payload>` (`SplitProjectAndPayload`); `ask` keeps greedy binding
+  (its lone token is the wiki for the REPL).
+- **The API surface** is a second MVC controller,
+  [`ProjectController`](../../src/LlmWiki.Api/Controllers/ProjectController.cs): `GET /projects`,
+  `GET /projects/{name}` (404 if absent), and `POST /projects` (scaffold + register → `201`; duplicate
+  → `409`). `select` has no endpoint — the pointer is CLI-local, since the API takes the project name
+  per request.
+
+The registry stays current because ingestion's **step 10** (above) stamps `last_ingest_at` + counts
+best-effort on every run.
 
 ---
 
@@ -458,10 +511,13 @@ dotnet run --project src/LlmWiki.Cli -- search demo "how the thing works" --top-
 dotnet run --project src/LlmWiki.Cli -- reindex demo          # backfill: embed all existing pages
 dotnet run --project src/LlmWiki.Cli -- ask demo "how does the thing work?"   # one-shot cited answer
 dotnet run --project src/LlmWiki.Cli -- ask demo                              # REPL (:save, :quit)
+dotnet run --project src/LlmWiki.Cli -- project create|select ml-papers       # register + make active
+dotnet run --project src/LlmWiki.Cli -- project list                          # registry; * = active
+dotnet run --project src/LlmWiki.Cli -- ingest|search|ask "…"                 # omit wiki → active project
 ```
 
 **API** — `GET /health` (liveness), `GET /diagnostics` (the three checks; 200/503),
-`POST /query` (grounded cited answer; `/swagger` UI in development).
+`POST /query` (grounded cited answer), `GET`·`POST /projects` (registry; `/swagger` UI in development).
 
 **Infra** — `cd docker && docker compose up -d`, then pull the models
 (`ollama pull nomic-embed-text`, `ollama pull llama3.1`).

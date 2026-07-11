@@ -41,6 +41,16 @@ dotnet run --project src/LlmWiki.Cli -- ask demo "how does the thing work?"   # 
 dotnet run --project src/LlmWiki.Cli -- ask demo                              # no question → interactive REPL (:save, :quit)
 # HTTP: POST /query {"wiki":"demo","question":"…"} — browse http://localhost:5080/swagger to invoke it
 
+# Projects (Phase 6) — Oracle registry (wiki_project) + a persisted "active project" pointer
+dotnet run --project src/LlmWiki.Cli -- project create ml-papers   # scaffold wiki + register in Oracle + make active
+dotnet run --project src/LlmWiki.Cli -- project list               # registry + metadata; * marks the active project
+dotnet run --project src/LlmWiki.Cli -- project select ml-papers   # persist the active project ({WIKI_ROOT}/.current-project)
+# With a project selected, ingest/search/ask default to it when the wiki name is omitted:
+dotnet run --project src/LlmWiki.Cli -- ingest ./docs/sample-source.md   # into the active project
+dotnet run --project src/LlmWiki.Cli -- search "how the thing works"     # active project
+dotnet run --project src/LlmWiki.Cli -- ask                              # REPL on the active project
+# HTTP: GET /projects, GET /projects/{name}, POST /projects {"name":"…"} — browse http://localhost:5080/swagger
+
 # Expo client (Node 24). `lint` is a typecheck — there is no ESLint.
 cd app && npm install && npm run web          # also: npm run ios / npm run android
 npm run lint                                  # tsc --noEmit
