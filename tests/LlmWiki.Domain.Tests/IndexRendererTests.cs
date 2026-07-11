@@ -31,6 +31,21 @@ public class IndexRendererTests
     }
 
     [Fact]
+    public void Render_PlacesAnswerPages_UnderAnswersHeading()
+    {
+        var md = IndexRenderer.Render(
+        [
+            Entry("answers/how-it-works.md", "How it works", PageType.Answer),
+            Entry("topics/anvils.md", "Anvils", PageType.Overview),
+        ], LinkStyle.Wikilink);
+
+        Assert.Contains("## Answers", md);
+        // Answers is the last fixed section (after Overviews).
+        Assert.True(md.IndexOf("## Overviews", StringComparison.Ordinal) < md.IndexOf("## Answers", StringComparison.Ordinal));
+        Assert.True(md.IndexOf("## Answers", StringComparison.Ordinal) < md.IndexOf("[[How it works]]", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Render_SortsEntriesWithinSectionByPath()
     {
         var md = IndexRenderer.Render(

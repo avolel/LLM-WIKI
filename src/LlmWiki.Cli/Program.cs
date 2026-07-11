@@ -7,6 +7,7 @@ using LlmWiki.Shared.Configuration;
 using LlmWiki.Agents;
 using LlmWiki.Application.Indexing;
 using LlmWiki.Application.Ingestion;
+using LlmWiki.Application.Query;
 using Microsoft.Extensions.DependencyInjection;
 
 var root = new RootCommand("LLM Wiki CLI — local operations and diagnostics.");
@@ -19,6 +20,7 @@ root.Subcommands.Add(BuildWikiCommand());
 root.Subcommands.Add(BuildIngestCommand());
 root.Subcommands.Add(BuildSearchCommand());
 root.Subcommands.Add(BuildReindexCommand());
+root.Subcommands.Add(BuildAskCommand());
 
 return await root.Parse(args).InvokeAsync();
 
@@ -58,7 +60,7 @@ static Command BuildIngestCommand()
         var file = pr.GetValue(fileArg)!;
         var content = await File.ReadAllTextAsync(file.FullName, ct);
 
-        // Place the source under the immutable raw/ dir (write-once; never overwrite — NFR-02).
+        // Place the source under the immutable raw/ dir (write-once; never overwrite).
         var rawPath = $"{wikiName}/raw/{file.Name}";
         if (!await files.ExistsAsync(rawPath, ct))
         {
@@ -153,7 +155,107 @@ static Command BuildReindexCommand()
     return reindex;
 }
 
-// Phase 0: connectivity checks and diagnostics.
+// Phase 5: query/synthesis. With a question, answer once and exit; without one, open a REPL that
+// keeps conversation history in-process (BR-044) and can save a good answer back as a page (BR-045).
+static Command BuildAskCommand()
+{
+    var wikiArg = new Argument<string>("wiki") { Description = "Wiki to ask." };
+    var questionArg = new Argument<string?>("question")
+    {
+        Description = "Question to answer once. Omit to open an interactive REPL.",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
+    var topK = new Option<int>("--top-k") { Description = "Candidates to retrieve.", DefaultValueFactory = _ => 5 };
+    var type = new Option<PageType?>("--type") { Description = "Restrict to a page type (entity|concept|summary|overview|answer)." };
+
+    var ask = new Command("ask", "Ask a question and get a grounded, cited answer (REPL for follow-ups).");
+    ask.Arguments.Add(wikiArg);
+    ask.Arguments.Add(questionArg);
+    ask.Options.Add(topK);
+    ask.Options.Add(type);
+
+    ask.SetAction(async (pr, ct) =>
+    {
+        await using var provider = BuildProvider();
+        var repo = provider.GetRequiredService<IWikiRepository>();
+        var svc = provider.GetRequiredService<IQueryService>();
+
+        var wikiName = pr.GetValue(wikiArg)!;
+        if (!await repo.WikiExistsAsync(wikiName, ct))
+        {
+            await Console.Error.WriteLineAsync($"Wiki '{wikiName}' not found.");
+            return 1;
+        }
+
+        var options = new QueryOptions(pr.GetValue(topK), pr.GetValue(type));
+        var single = pr.GetValue(questionArg);
+
+        // One-shot mode: answer the supplied question and exit.
+        if (!string.IsNullOrWhiteSpace(single))
+        {
+            var result = await svc.AnswerAsync(wikiName, single, [], options, ct);
+            PrintResult(result);
+            return 0;
+        }
+
+        // REPL mode: maintain history across turns; ':save' persists the last answer, ':quit' exits.
+        Console.WriteLine($"Asking '{wikiName}'. Type a question, ':save' to save the last answer, ':quit' to exit.");
+        var history = new List<ConversationTurn>();
+        QueryResult? last = null;
+
+        while (true)
+        {
+            Console.Write("> ");
+            var line = Console.ReadLine();
+            if (line is null || line.Trim() is ":quit" or ":q") break;
+            var input = line.Trim();
+            if (input.Length == 0) continue;
+
+            if (input is ":save")
+            {
+                if (last is null) { Console.WriteLine("Nothing to save yet."); continue; }
+                var outcome = await svc.SaveAnswerAsync(wikiName, last, ct);
+                Console.WriteLine(outcome.Change == PageChange.Failed
+                    ? $"Save failed: {outcome.Detail}"
+                    : $"Saved {outcome.RelativePath}{(outcome.Detail is null ? "" : $" (note: {outcome.Detail})")}");
+                continue;
+            }
+
+            last = await svc.AnswerAsync(wikiName, input, history, options, ct);
+            PrintResult(last);
+            history.Add(new ConversationTurn(input, last.Answer));
+        }
+        return 0;
+    });
+    return ask;
+}
+
+// Shared rendering for a synthesised answer: the markdown body, an honest-gap banner (BR-042),
+// then the resolvable citation list (BR-041).
+static void PrintResult(QueryResult result)
+{
+    if (!result.Covered)
+    {
+        Console.WriteLine("⚠  not covered by this wiki");
+    }
+    Console.WriteLine();
+    Console.WriteLine(result.Answer);
+    Console.WriteLine();
+    if (result.Citations.Count > 0)
+    {
+        Console.WriteLine("Sources:");
+        foreach (var c in result.Citations)
+        {
+            Console.WriteLine($"  {c.RelativePath}  — {c.Title} [{c.Type}]");
+        }
+    }
+    else
+    {
+        Console.WriteLine("Sources: (none)");
+    }
+}
+
+// connectivity checks and diagnostics.
 //This is a simple smoke test to verify that the environment is correctly configured before attempting any operations that could cause data loss (like creating wikis or writing pages).
 static async Task<int> RunDoctorAsync(CancellationToken cancellationToken)
 {
@@ -172,7 +274,7 @@ static async Task<int> RunDoctorAsync(CancellationToken cancellationToken)
     return report.AllPassed ? 0 : 1;
 }
 
-// Phase 1: wiki and page management commands.
+// wiki and page management commands.
 static Command BuildWikiCommand()
 {
     var wiki = new Command("wiki", "Create, list, and inspect wikis.");

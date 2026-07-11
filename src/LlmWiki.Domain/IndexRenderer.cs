@@ -3,9 +3,9 @@ using System.Text;
 namespace LlmWiki.Domain;
 
 /// <summary>
-/// Pure renderer for a wiki's <c>index.md</c> content catalogue (BR-020). Groups pages into fixed-order
+/// Pure renderer for a wiki's <c>index.md</c> content catalogue. Groups pages into fixed-order
 /// sections by <see cref="PageType"/>, omitting empty ones, with entries stably sorted by path so the
-/// file is deterministic and git diffs stay clean (BR-024 stale-entry removal falls out for free).
+/// file is deterministic and git diffs stay clean (stale-entry removal falls out for free).
 /// Links honour the wiki's <see cref="LinkStyle"/>, resolved relative to the root <c>index.md</c>.
 /// </summary>
 public static class IndexRenderer
@@ -19,6 +19,7 @@ public static class IndexRenderer
         (PageType.Entity, "Entities"),
         (PageType.Concept, "Concepts"),
         (PageType.Overview, "Overviews"),
+        (PageType.Answer, "Answers"),
     ];
 
     public static string Render(IReadOnlyList<IndexEntry> entries, LinkStyle style)

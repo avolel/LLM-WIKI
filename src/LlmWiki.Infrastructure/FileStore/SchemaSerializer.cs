@@ -5,7 +5,7 @@ using YamlDotNet.Serialization.NamingConventions;
 
 namespace LlmWiki.Infrastructure.FileStore;
 
-/// <summary>Renders and parses SCHEMA.md — a documented, machine-readable wiki schema (BR-002).</summary>
+/// <summary>Renders and parses SCHEMA.md — a documented, machine-readable wiki schema.</summary>
 internal static class SchemaSerializer
 {
     private const string Fence = "---";
@@ -35,6 +35,7 @@ internal static class SchemaSerializer
         sb.Append("- `summaries/` — one page per ingested source.\n");
         sb.Append("- `entities/` — people, companies, concepts.\n");
         sb.Append("- `topics/` — topic/overview pages connecting knowledge.\n");
+        sb.Append("- `answers/` — saved query answers (`type: answer`), created on demand.\n");
         sb.Append("- `raw/` — immutable source files (never modified).\n\n");
         sb.Append("## Frontmatter\n\nEvery page carries: ")
           .Append(string.Join(", ", schema.FrontmatterFields)).Append(".\n\n");

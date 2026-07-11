@@ -1,7 +1,9 @@
 using LlmWiki.Agents.Indexing;
 using LlmWiki.Agents.Ingestion;
+using LlmWiki.Agents.Query;
 using LlmWiki.Application.Indexing;
 using LlmWiki.Application.Ingestion;
+using LlmWiki.Application.Query;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LlmWiki.Agents;
@@ -15,10 +17,9 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddLlmWikiAgents(this IServiceCollection services)
     {
-        // Phase 2: ingestion orchestrator (plain; SK Process Framework can replace it behind the port).
-        services.AddSingleton<IIngestionService, IngestionService>();
-        // Phase 4: backfill indexer — embed all existing pages of a wiki into the vector store.
+        services.AddSingleton<IIngestionService, IngestionService>();        
         services.AddSingleton<IWikiIndexer, WikiIndexer>();
+        services.AddSingleton<IQueryService, QueryService>();
         return services;
     }
 }

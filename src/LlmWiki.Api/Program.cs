@@ -5,19 +5,26 @@ using LlmWiki.Shared.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Fold env/.env secrets into configuration (NFR-01: nothing sensitive in source/appsettings).
+// Fold env/.env secrets into configuration (nothing sensitive in source/appsettings).
 builder.Configuration.AddLlmWikiEnv();
 
-// Composition root: Infrastructure owns SK + Oracle wiring; Agents hook is a Phase 0 no-op.
+// Composition root: Infrastructure owns Semantic Kernel + Oracle wiring; Agents hook is a Phase 0 no-op.
 builder.Services.AddLlmWikiInfrastructure(builder.Configuration);
 builder.Services.AddLlmWikiAgents();
 builder.Services.AddOpenApi();
+
+// MVC controllers + Swagger UI power the query surface (POST /query). The existing
+// /health and /diagnostics stay as minimal APIs — a deliberate mix — and keep their OpenAPI doc.
+builder.Services.AddControllers();
+builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.UseSwagger();
+    app.UseSwaggerUI();
 }
 
 // Liveness: process is up. Cheap, no dependencies touched.
@@ -34,6 +41,9 @@ app.MapGet("/diagnostics", async (IDiagnosticsService diagnostics, CancellationT
         : Results.Json(report, statusCode: StatusCodes.Status503ServiceUnavailable);
 })
 .WithName("Diagnostics");
+
+// the query controller (POST /query).
+app.MapControllers();
 
 app.Run();
 
