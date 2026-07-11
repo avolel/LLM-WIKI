@@ -13,7 +13,8 @@ confidence. For the "why" behind individual phases, see the [plans](../plans/) a
 The product is a **wiki that grows itself from source documents**. You drop a document into a
 wiki, and an LLM agent reads it, extracts the entities/concepts/topics, writes and cross-links
 markdown pages, keeps a catalogue and a changelog, and makes everything searchable by meaning and
-by keyword.
+by keyword. You can then **ask it questions** and get a grounded, cited answer synthesised from the
+pages it retrieved — and save that answer back as a new page, so the wiki compounds on itself.
 
 Two design commitments shape everything:
 
@@ -46,10 +47,10 @@ Domain  ←  Application (ports)  ←  Infrastructure (adapters: Oracle, Ollama,
 | **`LlmWiki.Domain`** | Pure business types and pure functions (entities + renderers). No I/O, no framework. | nothing |
 | **`LlmWiki.Application`** | **Ports** (interfaces the app needs) + orchestration contracts/DTOs. Defines *what* is needed, not *how*. | Domain |
 | **`LlmWiki.Infrastructure`** | **Adapters** — the real implementations of every port (Oracle, Ollama, OpenAI/Anthropic, file store). Owns *all* Semantic Kernel + Oracle wiring. | Application, Shared |
-| **`LlmWiki.Agents`** | LLM agent orchestration. Today: the ingestion pipeline, written against ports only (no SK types) so it stays unit-testable. | Application, Shared |
+| **`LlmWiki.Agents`** | LLM agent orchestration. Today: the ingestion pipeline, the backfill indexer, and the query/synthesis service — all written against ports only (no SK types) so they stay unit-testable. | Application, Shared |
 | **`LlmWiki.Shared`** | Cross-cutting config: `env/.env` loading + strongly-typed options. A leaf with no project deps. | nothing |
-| **`LlmWiki.Api`** | ASP.NET minimal-API host. A thin **composition root**. | Infrastructure, Agents, Shared |
-| **`LlmWiki.Cli`** | Command-line host (`doctor`, `wiki`, `ingest`, `search`). The other composition root. | Infrastructure, Agents, Shared |
+| **`LlmWiki.Api`** | ASP.NET host — minimal APIs (`/health`, `/diagnostics`) **plus** the Phase 5 `POST /query` MVC controller and Swagger UI. A thin **composition root**. | Infrastructure, Agents, Shared |
+| **`LlmWiki.Cli`** | Command-line host (`doctor`, `wiki`, `ingest`, `search`, `reindex`, `ask`). The other composition root. | Infrastructure, Agents, Shared |
 
 **Why this matters when you edit code:** if you find yourself wanting to `using Oracle.…` or
 `using Microsoft.SemanticKernel` in Domain, Application, or (for SK) Agents, stop — that's a smell.
@@ -74,6 +75,7 @@ orchestration code only ever sees interfaces.
 | [`IProjectRepository`](../../src/LlmWiki.Application/Ports/IProjectRepository.cs) | `OracleProjectRepository` **(stub)** | Project/tenant persistence — throws until Phase 6. |
 | [`IIngestionService`](../../src/LlmWiki.Application/Ingestion/IIngestionService.cs) | `IngestionService` (Agents) | The whole ingest pipeline. |
 | [`IWikiIndexer`](../../src/LlmWiki.Application/Indexing/IWikiIndexer.cs) | `WikiIndexer` (Agents) | Backfill: embed every existing page of a wiki into the vector store. |
+| [`IQueryService`](../../src/LlmWiki.Application/Query/IQueryService.cs) | `QueryService` (Agents) | Query/synthesis: index → hybrid search → read candidates → cited answer; save an answer back as a page. |
 
 ---
 
@@ -92,12 +94,14 @@ wiki/
     summaries/            # one page per ingested source (PageType.Summary)
     entities/             # people/orgs/things (PageType.Entity)
     topics/              # overarching topic overviews (PageType.Overview)
+    answers/             # saved query answers (PageType.Answer), created on demand   ── Phase 5
     raw/                 # immutable copies of the original sources (write-once, NFR-02)
 ```
 
 - The four typed directories (`summaries`, `entities`, `topics`, `raw`) are fixed for every wiki —
-  see [`WikiSchema.Directories`](../../src/LlmWiki.Domain/WikiSchema.cs). (Concept pages live under
-  `concepts/`, created on demand.)
+  see [`WikiSchema.Directories`](../../src/LlmWiki.Domain/WikiSchema.cs). (`concepts/` for concept
+  pages and `answers/` for saved answers are created on demand — `WriteAsync` mkdirs on first use —
+  and `answers/` is documented in the generated `SCHEMA.md`.)
 - **`SCHEMA.md`** records the two per-wiki toggles: the **link style** (`[[Wikilink]]` vs.
   `[text](path.md)`) and the frontmatter field set. It's how `wiki create` and `wiki inspect` know
   a directory is a real wiki.
@@ -135,7 +139,9 @@ Everything here is deterministic and dependency-free — trivial to unit-test.
 
 - [`WikiPage`](../../src/LlmWiki.Domain/WikiPage.cs) — the page record: title, `PageType`, content,
   tags, sources, timestamps. An immutable `record` (use `with` to edit).
-- [`PageType`](../../src/LlmWiki.Domain/PageType.cs) — `Summary | Entity | Concept | Overview`.
+- [`PageType`](../../src/LlmWiki.Domain/PageType.cs) — `Summary | Entity | Concept | Overview | Answer`
+  (`Answer` is a Phase 5 saved query answer; it round-trips through the frontmatter serializer and the
+  vector store's case-insensitive `ParseType` with no adapter change).
 - [`WikiSchema`](../../src/LlmWiki.Domain/WikiSchema.cs) / [`LinkStyle`](../../src/LlmWiki.Domain/LinkStyle.cs)
   — the per-wiki conventions.
 - [`Slug`](../../src/LlmWiki.Domain/Slug.cs) — `"Acme Corp" → "acme-corp"`. The single source of truth
@@ -145,9 +151,9 @@ Everything here is deterministic and dependency-free — trivial to unit-test.
   [`CrossReferenceWriter`](../../src/LlmWiki.Domain/CrossReferenceWriter.cs) is the write-side mirror
   (render a link in the right style).
 - [`IndexRenderer`](../../src/LlmWiki.Domain/IndexRenderer.cs) + `IndexEntry` — render `index.md`:
-  fixed section order (Sources / Entities / Concepts / Overviews), empty sections omitted, entries
-  **stably sorted by path** so the file is deterministic (clean git diffs; a deleted page's line
-  just vanishes on the next rebuild — BR-024).
+  fixed section order (Sources / Entities / Concepts / Overviews / **Answers**), empty sections
+  omitted, entries **stably sorted by path** so the file is deterministic (clean git diffs; a deleted
+  page's line just vanishes on the next rebuild — BR-024).
 - [`LogEntry` + `LogFormatter`](../../src/LlmWiki.Domain/LogEntry.cs) — format one greppable
   `## [YYYY-MM-DD] ingest | <source>` log block.
 
@@ -178,7 +184,8 @@ Config is deliberately boring and centralized. Flow:
 The API host calls `builder.Configuration.AddLlmWikiEnv()`; the CLI calls
 `LlmWikiConfiguration.Build()`. Both then call
 [`AddLlmWikiInfrastructure`](../../src/LlmWiki.Infrastructure/DependencyInjection.cs) (wires every
-adapter + owns SK/Oracle) and `AddLlmWikiAgents` (wires the ingestion service).
+adapter + owns SK/Oracle) and `AddLlmWikiAgents` (wires the ingestion service, the backfill indexer,
+and the query service).
 
 > **To add a new setting:** add it in three places — `env/.env.example`, the options class, and the
 > `EnvToConfigKey` map. (That's how `EMBEDDING_STRATEGY` was added in Phase 4.)
@@ -295,6 +302,49 @@ records embed failures into its `IngestionReport`, the indexer into a `ReindexRe
 `EmbeddingText` but not the loop, to avoid coupling a backfill to the ingest pipeline — a candidate
 for later DRY-ing if it earns its keep.
 
+### 6f. Ask — `ask <wiki> [question]` / `POST /query` (Phase 5)
+
+Retrieval returns *pages*; this flow **answers a question**.
+[`QueryService.AnswerAsync`](../../src/LlmWiki.Agents/Query/QueryService.cs) is another plain,
+port-only orchestrator (no SK types), and it mirrors `IngestionService`'s shape:
+
+1. **Read the index** — `index.md` via `IWikiFileStore` (the journal has no read port), best-effort:
+   an absent index is not fatal, just an empty table-of-contents in the prompt (BR-040).
+2. **Hybrid search** — embed the question, then `IVectorStore.SearchAsync` — *the identical retrieval
+   the `search` command uses.* This is where relevance is decided; disk is never consulted to *select*
+   pages.
+3. **Hydrate candidates** — a `VectorSearchHit` carries path/title/type/score but **not the body**, so
+   each hit is read to full content via `IWikiRepository.ReadPageAsync` and assembled into a CONTEXT
+   block. A hit that no longer resolves on disk is skipped, not fatal.
+4. **Synthesise (one LLM call)** — a single JSON-mode call
+   ([`QueryPrompts.Synthesize`](../../src/LlmWiki.Agents/Prompts/QueryPrompts.cs), grounded strictly to
+   CONTEXT) returns `{title, answer, covered, citations}`, parsed through the **same `ExtractJson`
+   fence-stripper** as ingestion. The model chooses the answer's format (BR-043) and sets
+   `covered:false` when the corpus doesn't cover the question (BR-042 — no speculation).
+5. **Filter citations** — only citations whose path was *actually retrieved* survive (BR-041), each
+   re-attached to its hit's title/type, so every citation resolves to a real, openable page.
+
+Follow-ups are just an in-process `IReadOnlyList<ConversationTurn>` (prior Q/A pairs) that the CLI
+REPL accumulates and replays into the prompt each turn (BR-044); the HTTP surface carries the same
+list in the request body.
+
+**Saving an answer** — [`QueryService.SaveAnswerAsync`](../../src/LlmWiki.Agents/Query/QueryService.cs)
+(REPL `:save`, or `"save": true` on a *covered* `POST /query`) writes an `answers/<slug>.md`
+`PageType.Answer` page behind a **write boundary** (a failure returns a `Failed` `PageOutcome`, never
+throws), then — exactly like ingestion's final block — rebuilds `index.md` (the new page appears under
+the **Answers** heading), appends a greppable `## [date] query | <question>` line to `log.md`, and
+**best-effort embeds** the page so saved answers are themselves searchable (BR-045). Journal/embed
+failures are recorded on the outcome's `Detail`, never thrown (NFR-06) — the page is already safely on
+disk.
+
+**Two hosts, one service.** The CLI `ask` command is one-shot when a question is passed and an
+interactive REPL (`:save`/`:quit`) otherwise. The API exposes the same workflow through
+[`QueryController`](../../src/LlmWiki.Api/Controllers/QueryController.cs) — a thin `[ApiController]` that
+constructor-injects the ports and delegates straight to `IQueryService` (no logic in the controller).
+This is the codebase's **first MVC controller and its first Swagger UI**: `Program.cs` adds
+`AddControllers()` + `AddSwaggerGen()` and maps `/swagger` in development, while `/health` and
+`/diagnostics` stay minimal-API — a deliberate mix, so the query surface is the one controller.
+
 ---
 
 ## 7. Cross-cutting conventions
@@ -341,9 +391,9 @@ committed credential. Options classes that hold keys are never logged.
 | 2 | Source ingestion: extract → write pages → reconcile → `IngestionReport` | ✅ real |
 | 3 | Agent-owned journal: regenerated `index.md` + append-only `log.md` | ✅ real |
 | 4 | Hybrid retrieval: per-page embeddings + Oracle Text, embed-on-change, `search` CLI | ✅ real |
-| 5 | Query/answering (read the index into query context, the log into session context) | ⏳ next |
+| 5 | Query/synthesis: index → hybrid search → cited answer; `ask` REPL + `POST /query`; save-answer | ✅ real |
 | 6 | Project/tenant persistence (`OracleProjectRepository`) | 🔲 stub |
-| 8 | React Native / Expo UI | 🔲 skeleton in `app/` |
+| 8 | React Native / Expo UI, token streaming, log-into-session-context (BR-023) | 🔲 skeleton in `app/` |
 
 ---
 
@@ -363,6 +413,14 @@ ports.
   contradiction-noted page is re-embedded, and an embed failure becomes a `Failed` outcome rather
   than an exception (NFR-06).
 - **Api tests** — host the API via `WebApplicationFactory` (`Program` is exposed `partial` for this).
+  `QueryEndpointTests` overrides `IQueryService` and `IWikiRepository` with fakes in
+  `ConfigureTestServices`, so `POST /query` is exercised (200 + result, 404 for a missing wiki) with no
+  Oracle/LLM.
+- **Query (Agents) tests** — `QueryServiceTests` seeds a temp-dir wiki with real pages, a
+  `ScriptedChat` returns canned `SynthesisResult` JSON, and a fake vector store returns hits for the
+  seeded paths. They assert citations resolve to real pages, `covered:false` flows through, a saved
+  answer lands as `answers/<slug>.md` (`type: answer`) with a `query` log line + Answers index entry +
+  a vector upsert, and that an embed failure on save is recorded (not thrown — NFR-06).
 
 Run everything with `dotnet test LlmWiki.slnx`; scope to one project or filter by name as shown in
 [CLAUDE.md](../../CLAUDE.md).
@@ -380,6 +438,8 @@ Run everything with `dotnet test LlmWiki.slnx`; scope to one project or filter b
 - **Change what gets embedded** → `EmbeddingStrategy` in `EmbeddingOptions` + `EmbeddingText.For`.
 - **Change ranking/fusion** → `OracleVectorStore.Fuse` (the RRF constant `k`, the over-fetch factor)
   and the two SQL arms.
+- **Change how answers are synthesised** → `QueryPrompts.Synthesize` (the grounding/format/gap rules)
+  and `QueryService.AnswerAsync` (retrieval → context → citation filtering).
 
 ---
 
@@ -395,9 +455,12 @@ dotnet run --project src/LlmWiki.Cli -- wiki page add|show demo <path> …
 dotnet run --project src/LlmWiki.Cli -- ingest demo ./docs/sample-source.md
 dotnet run --project src/LlmWiki.Cli -- search demo "how the thing works" --top-k 5 --type entity
 dotnet run --project src/LlmWiki.Cli -- reindex demo          # backfill: embed all existing pages
+dotnet run --project src/LlmWiki.Cli -- ask demo "how does the thing work?"   # one-shot cited answer
+dotnet run --project src/LlmWiki.Cli -- ask demo                              # REPL (:save, :quit)
 ```
 
-**API** — `GET /health` (liveness), `GET /diagnostics` (the three checks; 200/503).
+**API** — `GET /health` (liveness), `GET /diagnostics` (the three checks; 200/503),
+`POST /query` (grounded cited answer; `/swagger` UI in development).
 
 **Infra** — `cd docker && docker compose up -d`, then pull the models
 (`ollama pull nomic-embed-text`, `ollama pull llama3.1`).

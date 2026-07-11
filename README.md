@@ -9,13 +9,18 @@ LLM agent extracts entities/concepts, writes a summary, creates/updates entity, 
 pages, and notes contradictions; **Phase 3** adds the agent-owned journal — every ingest
 regenerates an `index.md` catalogue and appends to a `log.md` history; and **Phase 4** makes
 the wiki *searchable* — each changed page is embedded into Oracle (768-dim `VECTOR` + Oracle Text)
-and a CLI `search` command ranks pages by a hybrid of semantic similarity and full-text matching.
+and a CLI `search` command ranks pages by a hybrid of semantic similarity and full-text matching;
+and **Phase 5** makes the wiki *answer questions* — an `ask` command (one-shot or an interactive
+follow-up REPL) and a `POST /query` HTTP endpoint read the index, run hybrid search, read the top
+pages, and synthesise a grounded, **cited** answer that honestly reports gaps — and can save a good
+answer back as a new, itself-indexed `Answer` page.
 See
 [docs/plans/plan-phase-0.md](docs/plans/plan-phase-0.md),
 [docs/plans/plan-phase-1.md](docs/plans/plan-phase-1.md),
 [docs/plans/plan-phase-2.md](docs/plans/plan-phase-2.md),
 [docs/plans/plan-phase-3.md](docs/plans/plan-phase-3.md),
-[docs/plans/plan-phase-4.md](docs/plans/plan-phase-4.md), a plain-English
+[docs/plans/plan-phase-4.md](docs/plans/plan-phase-4.md),
+[docs/plans/plan-phase-5.md](docs/plans/plan-phase-5.md), a plain-English
 [code overview for developers](docs/code-overview/code-overview.md), and the foundational decisions in
 [docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md).
 
@@ -84,7 +89,8 @@ Wikis are plain directories under `WIKI_ROOT` (default `wiki/`). Each wiki has f
 directories — `summaries/`, `entities/`, `topics/`, `raw/` (BR-001) — and a `SCHEMA.md` that records
 its conventions (link style + frontmatter field set, BR-002/005). Pages are markdown with YAML
 frontmatter (`title`, `type`, `created`, `updated`, `tags`, `sources`, BR-003); `type` is one of
-`Summary`, `Entity`, `Concept`, `Overview`. Cross-references use either `[[Wikilink]]` or markdown
+`Summary`, `Entity`, `Concept`, `Overview`, `Answer` (the last for saved query answers — Phase 5).
+Cross-references use either `[[Wikilink]]` or markdown
 `[text](path.md)` style per the wiki's schema (BR-004), and can be resolved to flag broken links.
 
 The `LlmWiki.Cli` exposes this surface:
@@ -186,6 +192,50 @@ dotnet run --project src/LlmWiki.Cli -- search demo "your query"
 Like the ingest embed-step it is best-effort per page (a page that fails to embed is reported, not
 fatal — NFR-06), and `UpsertAsync` is keyed by `(wiki_name, path)` so re-running is idempotent.
 
+## Query & synthesis (Phase 5)
+
+Search returns *pages*; `ask` **answers a question**. It reads the wiki's `index.md`, runs the same
+hybrid search to pick the top candidate pages, reads them in full, and makes a single LLM call to
+synthesise a grounded answer — choosing its own format (prose, a table for comparisons, a list for
+timelines — BR-043) and citing the specific pages it used by path (BR-041). If the corpus doesn't
+cover the question it says so plainly instead of speculating (BR-042). Only citations that were
+actually retrieved survive, so every "Sources:" line opens to a real page.
+
+```bash
+# One-shot: answer and exit
+dotnet run --project src/LlmWiki.Cli -- ask demo "how does the thing work?" --top-k 5 --type entity
+
+# Interactive REPL (omit the question): follow-ups keep conversation history in-process (BR-044)
+dotnet run --project src/LlmWiki.Cli -- ask demo
+#   > how does the thing work?          → a cited answer, then a "Sources:" list
+#   > and how does it relate to X?      → pronoun follow-up; prior turns are carried into the prompt
+#   > :save                             → persists the last answer as answers/<slug>.md (BR-045)
+#   > :quit
+```
+
+**Saving an answer** (`:save`, or `POST /query` with `"save": true`) writes a new `Answer` page under
+`answers/`, regenerates `index.md` (the new page appears under an **Answers** heading), appends a
+greppable `## [YYYY-MM-DD] query | <question>` line to `log.md`, and **best-effort** embeds the page
+so it's itself searchable next time — the compounding loop the product is built around. The embed is
+best-effort: if Oracle is down the page is still saved and the failure is recorded, not thrown (NFR-06).
+An uncovered answer prints a clear `⚠  not covered by this wiki` banner and is never saved.
+
+The same workflow is HTTP-reachable via a `POST /query` controller — the API's first MVC controller,
+with **Swagger UI** for interactive testing:
+
+```bash
+dotnet run --project src/LlmWiki.Api            # http://localhost:5080
+#   browse http://localhost:5080/swagger and invoke POST /query, or:
+curl -s localhost:5080/query -H 'content-type: application/json' \
+     -d '{"wiki":"demo","question":"how does the thing work?"}'
+#   → { "answer": "…", "covered": true, "citations": [ … ], "suggestedTitle": "…" }
+#   a missing wiki → 404. History carries follow-up context over HTTP; "save": true persists a covered answer.
+```
+
+`ask`/`/query` need a working chat provider and Oracle with embedded pages to answer from (run
+`ingest`, or `reindex` an older wiki, first). `/health` and `/diagnostics` stay minimal-API — the
+query surface is a deliberate first use of MVC controllers + Swagger in this codebase.
+
 ## Configuration
 
 All secrets live in `env/.env` (gitignored); `env/.env.example` documents every key with
@@ -237,10 +287,11 @@ Oracle now holds a **derived search index** (`wiki_page`: embeddings + Oracle Te
 writes on ingest. `docker/oracle/spike-vector.sql` was the manual spike (R-02) that validated
 `VECTOR` DML + Oracle Text before the real `OracleVectorStore` adapter was built.
 `OracleProjectRepository` (project/tenant persistence) is still a stub that throws
-`NotImplementedException` until Phase 6. Reading the index into query context and the log into
-session context (BR-023) is Phase 5 / Phase 8. Everything else is real: the embedding/chat/
-Oracle-health diagnostics paths, the file-backed wiki store/repository, the journal, and the
-hybrid vector store.
+`NotImplementedException` until Phase 6. Phase 5 reads the index into query context; carrying the
+log into session context (BR-023), token **streaming** to the client, and the React Native chat UI
+remain Phase 8. Everything else is real: the embedding/chat/Oracle-health diagnostics paths, the
+file-backed wiki store/repository, the journal, the hybrid vector store, and the query/synthesis
+workflow (`ask` REPL + `POST /query`).
 
 > Note: the .NET 10 SDK emits a solution as `LlmWiki.slnx` (XML solution format). Use
 > `dotnet build LlmWiki.slnx` (or just `dotnet build`).
