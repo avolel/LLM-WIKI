@@ -20,6 +20,8 @@ public sealed class IngestionService(
     IWikiJournal journal,
     IEmbeddingService embeddings,
     IVectorStore vectors,
+    IWikiFileStore files,
+    IProjectRepository projects,
     IOptions<EmbeddingOptions> embedOptions) : IIngestionService
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
@@ -86,7 +88,30 @@ public sealed class IngestionService(
 
         await EmbedChangedPagesAsync(wikiName, report, outcomes, ct);
 
+        await RecordProjectAsync(wikiName, outcomes, ct);
+
         return report;
+    }
+
+    /// <summary>
+    /// Best-effort project-metadata update (BR-052): stamp last-ingest and store recomputed page/source
+    /// counts. A failure (e.g. Oracle down) is recorded as a Failed outcome, never thrown — file + journal
+    /// ingestion keep working and the wiki is never corrupted (NFR-06).
+    /// </summary>
+    private async Task RecordProjectAsync(string wikiName, List<PageOutcome> outcomes, CancellationToken ct)
+    {
+        try
+        {
+            var pageCount = (await wiki.ListPagesAsync(wikiName, ct)).Count;
+            var sourceCount = 0;
+            await foreach (var p in files.ListAsync($"{wikiName}/raw/", ct))
+                if (!p.EndsWith(".gitkeep", StringComparison.Ordinal)) sourceCount++;
+            await projects.RecordIngestAsync(wikiName, pageCount, sourceCount, ct);
+        }
+        catch (Exception ex)
+        {
+            outcomes.Add(new PageOutcome("project", "Project metadata", PageChange.Failed, $"project: {ex.Message}"));
+        }
     }
 
     /// <summary>

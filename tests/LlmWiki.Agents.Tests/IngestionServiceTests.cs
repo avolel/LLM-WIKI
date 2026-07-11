@@ -14,18 +14,21 @@ public sealed class IngestionServiceTests : IDisposable
         Path.Combine(Path.GetTempPath(), "llmwiki-ingest-tests", Guid.NewGuid().ToString("N"));
     private readonly IWikiRepository _repo;
     private readonly IWikiJournal _journal;
+    private readonly FileSystemWikiFileStore _files;
     private readonly FakeEmbeddingService _embeddings = new();
     private readonly FakeVectorStore _vectors = new();
+    private readonly FakeProjectRepository _projects = new();
 
     public IngestionServiceTests()
     {
-        var files = new FileSystemWikiFileStore(Options.Create(new WikiOptions { RootPath = _root }));
-        _repo = new FileSystemWikiRepository(files);
-        _journal = new FileSystemWikiJournal(_repo, files);
+        _files = new FileSystemWikiFileStore(Options.Create(new WikiOptions { RootPath = _root }));
+        _repo = new FileSystemWikiRepository(_files);
+        _journal = new FileSystemWikiJournal(_repo, _files);
     }
 
-    private IngestionService BuildService(IChatService chat, IVectorStore? vectors = null) =>
-        new(chat, _repo, _journal, _embeddings, vectors ?? _vectors,
+    private IngestionService BuildService(
+        IChatService chat, IVectorStore? vectors = null, IProjectRepository? projects = null) =>
+        new(chat, _repo, _journal, _embeddings, vectors ?? _vectors, _files, projects ?? _projects,
             Options.Create(new EmbeddingOptions()));
 
     [Fact]
@@ -126,6 +129,48 @@ public sealed class IngestionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Ingest_RecordsProjectMetadata_WithPageAndSourceCounts()
+    {
+        await _repo.CreateWikiAsync(new WikiSchema { WikiName = "alpha" });
+        // A raw source on disk so the source count is observable (excludes the scaffolded .gitkeep).
+        await _files.WriteAsync("alpha/raw/anvils.md", "Acme builds heavy anvils.");
+        var chat = new ScriptedChat(extraction: """
+            {"sourceTitle":"Anvil Report","summary":"Acme builds anvils.","keyPoints":[],
+             "entities":[{"name":"Acme Corp","description":"An anvil maker.","thin":false}],
+             "concepts":[],"tags":["anvils"],"topicTitle":"Anvils","topicSummary":"Overview of anvils."}
+            """);
+        var svc = BuildService(chat);
+
+        await svc.IngestAsync("alpha", "raw/anvils.md", "Acme builds heavy anvils.");
+
+        // BR-052: exactly one metadata record with the recomputed counts (1 source, some pages).
+        var record = Assert.Single(_projects.Records);
+        Assert.Equal("alpha", record.Name);
+        Assert.True(record.PageCount > 0);
+        Assert.Equal(1, record.SourceCount);
+    }
+
+    [Fact]
+    public async Task Ingest_ProjectRecordFailure_IsRecordedNotThrown()
+    {
+        await _repo.CreateWikiAsync(new WikiSchema { WikiName = "alpha" });
+        var chat = new ScriptedChat(extraction: """
+            {"sourceTitle":"S","summary":"x","keyPoints":[],
+             "entities":[{"name":"Acme Corp","description":"maker","thin":false}],
+             "concepts":[],"tags":[],"topicTitle":"","topicSummary":""}
+            """);
+        var svc = BuildService(chat, projects: new ThrowingProjectRepository());
+
+        // NFR-06: an Oracle-down metadata write never throws — it lands as a Failed "project" outcome,
+        // and the pages are still written.
+        var report = await svc.IngestAsync("alpha", "raw/s.md", "...");
+
+        Assert.Contains(report.Outcomes, o => o.Change == PageChange.Failed && o.Detail!.StartsWith("project:"));
+        var page = await _repo.ReadPageAsync("alpha", "entities/acme-corp.md");
+        Assert.Equal("Acme Corp", page.Title);
+    }
+
+    [Fact]
     public async Task Ingest_ThinItem_IsFlaggedAsGapAndStub()
     {
         await _repo.CreateWikiAsync(new WikiSchema { WikiName = "alpha" });
@@ -204,6 +249,36 @@ public sealed class IngestionServiceTests : IDisposable
             ReadOnlyMemory<float> queryEmbedding, int topK, PageType? typeFilter = null,
             CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<VectorSearchHit>>([]);
+    }
+
+    /// <summary>Fake project registry: records the metadata write so counts can be asserted.</summary>
+    private sealed class FakeProjectRepository : IProjectRepository
+    {
+        public List<ProjectInfo> Records { get; } = [];
+
+        public Task RecordIngestAsync(string name, int pageCount, int sourceCount, CancellationToken cancellationToken = default)
+        {
+            Records.Add(new ProjectInfo(name, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, pageCount, sourceCount));
+            return Task.CompletedTask;
+        }
+
+        public Task RegisterAsync(string name, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<ProjectInfo>> ListAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<ProjectInfo>>(Records);
+        public Task<ProjectInfo?> GetAsync(string name, CancellationToken cancellationToken = default)
+            => Task.FromResult(Records.FirstOrDefault(r => r.Name == name));
+    }
+
+    /// <summary>Fake project registry that fails the metadata write (simulates Oracle being down).</summary>
+    private sealed class ThrowingProjectRepository : IProjectRepository
+    {
+        public Task RecordIngestAsync(string name, int pageCount, int sourceCount, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("oracle down");
+        public Task RegisterAsync(string name, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<ProjectInfo>> ListAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<ProjectInfo>>([]);
+        public Task<ProjectInfo?> GetAsync(string name, CancellationToken cancellationToken = default)
+            => Task.FromResult<ProjectInfo?>(null);
     }
 
     /// <summary>Fake vector store that fails every upsert (simulates Oracle being down).</summary>

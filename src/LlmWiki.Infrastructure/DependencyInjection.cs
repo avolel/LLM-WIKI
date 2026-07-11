@@ -31,9 +31,12 @@ public static class DependencyInjection
         AddEmbeddings(services, embedding);
         AddChat(services, chat);
 
-        // Oracle connectivity probe (real) + project persistence (stub until Phase 3).
+        // Oracle connectivity probe (real) + project registry (Phase 6).
         services.AddSingleton<IDatabaseHealthCheck, OracleDatabaseHealthCheck>();
         services.AddSingleton<IProjectRepository, OracleProjectRepository>();
+
+        // Phase 6: host-local active-project pointer ({WIKI_ROOT}/.current-project).
+        services.AddSingleton<ICurrentProjectStore, FileCurrentProjectStore>();
 
         // Phase 4: real Oracle VECTOR + Oracle Text hybrid store (replaces the stub).
         services.AddSingleton<IVectorStore, OracleVectorStore>();

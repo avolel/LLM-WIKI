@@ -32,6 +32,7 @@ public class DependencyInjectionTests
         Assert.NotNull(provider.GetRequiredService<IVectorStore>());
         Assert.NotNull(provider.GetRequiredService<IWikiFileStore>());
         Assert.NotNull(provider.GetRequiredService<IProjectRepository>());
+        Assert.NotNull(provider.GetRequiredService<ICurrentProjectStore>());
         Assert.NotNull(provider.GetRequiredService<IDiagnosticsService>());
         Assert.NotNull(provider.GetRequiredService<IWikiRepository>());
     }

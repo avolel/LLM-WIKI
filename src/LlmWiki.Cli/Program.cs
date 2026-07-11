@@ -17,6 +17,7 @@ doctor.SetAction((_, ct) => RunDoctorAsync(ct));
 
 root.Subcommands.Add(doctor);
 root.Subcommands.Add(BuildWikiCommand());
+root.Subcommands.Add(BuildProjectCommand());
 root.Subcommands.Add(BuildIngestCommand());
 root.Subcommands.Add(BuildSearchCommand());
 root.Subcommands.Add(BuildReindexCommand());
@@ -34,10 +35,43 @@ static ServiceProvider BuildProvider()
     return services.BuildServiceProvider();
 }
 
+// Resolve the target project (Phase 6): an explicit name wins, else the persisted active project,
+// else an error. Also guards that the wiki exists on disk. Returns null and prints to stderr on miss.
+static async Task<string?> ResolveWikiAsync(
+    IWikiRepository repo, ICurrentProjectStore current, string? explicitName, CancellationToken ct)
+{
+    var name = string.IsNullOrWhiteSpace(explicitName) ? await current.GetAsync(ct) : explicitName;
+    if (string.IsNullOrWhiteSpace(name))
+    {
+        await Console.Error.WriteLineAsync("No project specified and none selected (use 'project select <name>').");
+        return null;
+    }
+    if (!await repo.WikiExistsAsync(name, ct))
+    {
+        await Console.Error.WriteLineAsync($"Wiki '{name}' not found.");
+        return null;
+    }
+    return name;
+}
+
+// Two-positional disambiguation for `ingest`/`search` (Phase 6). System.CommandLine binds a lone
+// token to the first (optional) positional, but here a single token is the required payload with the
+// project taken from the active pointer; two tokens mean an explicit <project> <payload>.
+static (string? Project, string? Payload) SplitProjectAndPayload(string? first, string? second) =>
+    second is null ? (null, first) : (first, second);
+
 static Command BuildIngestCommand()
 {
-    var wikiArg = new Argument<string>("wiki") { Description = "Target wiki name." };
-    var fileArg = new Argument<FileInfo>("file") { Description = "Source file to ingest (markdown/text)." };
+    var wikiArg = new Argument<string?>("wiki")
+    {
+        Description = "Target wiki name (defaults to the active project).",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
+    var fileArg = new Argument<FileInfo?>("file")
+    {
+        Description = "Source file to ingest (markdown/text).",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
     var ingest = new Command("ingest", "Ingest a source into a wiki: copies it into raw/ then builds pages.");
 
     ingest.Arguments.Add(wikiArg);
@@ -48,16 +82,33 @@ static Command BuildIngestCommand()
         await using var provider = BuildProvider();
         var repo = provider.GetRequiredService<IWikiRepository>();
         var files = provider.GetRequiredService<IWikiFileStore>();
+        var current = provider.GetRequiredService<ICurrentProjectStore>();
         var service = provider.GetRequiredService<IIngestionService>();
 
-        var wikiName = pr.GetValue(wikiArg)!;
-        if (!await repo.WikiExistsAsync(wikiName, ct))
+        // A lone token is the source file (bound to the first/optional slot); two tokens are <wiki> <file>.
+        var firstToken = pr.GetValue(wikiArg);
+        var fileValue = pr.GetValue(fileArg);
+        string? explicitWiki;
+        FileInfo file;
+        if (fileValue is null)
         {
-            await Console.Error.WriteLineAsync($"Wiki '{wikiName}' not found.");
-            return 1;
+            if (string.IsNullOrWhiteSpace(firstToken))
+            {
+                await Console.Error.WriteLineAsync("A source file is required.");
+                return 1;
+            }
+            explicitWiki = null;
+            file = new FileInfo(firstToken);
+        }
+        else
+        {
+            explicitWiki = firstToken;
+            file = fileValue;
         }
 
-        var file = pr.GetValue(fileArg)!;
+        var wikiName = await ResolveWikiAsync(repo, current, explicitWiki, ct);
+        if (wikiName is null) return 1;
+
         var content = await File.ReadAllTextAsync(file.FullName, ct);
 
         // Place the source under the immutable raw/ dir (write-once; never overwrite).
@@ -85,8 +136,16 @@ static Command BuildIngestCommand()
 // Phase 4: hybrid search — embed the query, then rank pages by fused vector + Oracle Text score.
 static Command BuildSearchCommand()
 {
-    var wikiArg = new Argument<string>("wiki") { Description = "Wiki to search." };
-    var queryArg = new Argument<string>("query") { Description = "Search text (natural language or exact term)." };
+    var wikiArg = new Argument<string?>("wiki")
+    {
+        Description = "Wiki to search (defaults to the active project).",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
+    var queryArg = new Argument<string?>("query")
+    {
+        Description = "Search text (natural language or exact term).",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
     var topK = new Option<int>("--top-k") { Description = "Number of results.", DefaultValueFactory = _ => 5 };
     var type = new Option<PageType?>("--type") { Description = "Restrict to a page type (entity|concept|summary|overview)." };
 
@@ -101,17 +160,19 @@ static Command BuildSearchCommand()
     {
         await using var provider = BuildProvider();
         var repo = provider.GetRequiredService<IWikiRepository>();
+        var current = provider.GetRequiredService<ICurrentProjectStore>();
         var embeddings = provider.GetRequiredService<IEmbeddingService>();
         var vectors = provider.GetRequiredService<IVectorStore>();
 
-        var wikiName = pr.GetValue(wikiArg)!;
-        if (!await repo.WikiExistsAsync(wikiName, ct))
+        var (explicitWiki, query) = SplitProjectAndPayload(pr.GetValue(wikiArg), pr.GetValue(queryArg));
+        if (string.IsNullOrWhiteSpace(query))
         {
-            await Console.Error.WriteLineAsync($"Wiki '{wikiName}' not found.");
+            await Console.Error.WriteLineAsync("A search query is required.");
             return 1;
         }
+        var wikiName = await ResolveWikiAsync(repo, current, explicitWiki, ct);
+        if (wikiName is null) return 1;
 
-        var query = pr.GetValue(queryArg)!;
         var embedding = await embeddings.EmbedAsync(query, ct);
         var hits = await vectors.SearchAsync(wikiName, query, embedding, pr.GetValue(topK), pr.GetValue(type), ct);
 
@@ -159,7 +220,11 @@ static Command BuildReindexCommand()
 // keeps conversation history in-process (BR-044) and can save a good answer back as a page (BR-045).
 static Command BuildAskCommand()
 {
-    var wikiArg = new Argument<string>("wiki") { Description = "Wiki to ask." };
+    var wikiArg = new Argument<string?>("wiki")
+    {
+        Description = "Wiki to ask (defaults to the active project).",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
     var questionArg = new Argument<string?>("question")
     {
         Description = "Question to answer once. Omit to open an interactive REPL.",
@@ -178,14 +243,11 @@ static Command BuildAskCommand()
     {
         await using var provider = BuildProvider();
         var repo = provider.GetRequiredService<IWikiRepository>();
+        var current = provider.GetRequiredService<ICurrentProjectStore>();
         var svc = provider.GetRequiredService<IQueryService>();
 
-        var wikiName = pr.GetValue(wikiArg)!;
-        if (!await repo.WikiExistsAsync(wikiName, ct))
-        {
-            await Console.Error.WriteLineAsync($"Wiki '{wikiName}' not found.");
-            return 1;
-        }
+        var wikiName = await ResolveWikiAsync(repo, current, pr.GetValue(wikiArg), ct);
+        if (wikiName is null) return 1;
 
         var options = new QueryOptions(pr.GetValue(topK), pr.GetValue(type));
         var single = pr.GetValue(questionArg);
@@ -272,6 +334,95 @@ static async Task<int> RunDoctorAsync(CancellationToken cancellationToken)
     Console.WriteLine();
     Console.WriteLine(report.AllPassed ? "All checks passed." : "One or more checks FAILED.");
     return report.AllPassed ? 0 : 1;
+}
+
+// Phase 6: project registry. `create` scaffolds the wiki AND registers it in Oracle (files are
+// canonical, so registration is best-effort); `list` reads the Oracle registry; `select` persists
+// the host-local active-project pointer so later commands can omit the wiki name.
+static Command BuildProjectCommand()
+{
+    var project = new Command("project", "Create, list, and select projects (a project == a wiki).");
+
+    // create
+    var createName = new Argument<string>("name") { Description = "Project name (== wiki directory)." };
+    var linkStyle = new Option<LinkStyle>("--link-style")
+    {
+        Description = "Cross-reference style.",
+        DefaultValueFactory = _ => LinkStyle.Wikilink,
+    };
+    var create = new Command("create", "Scaffold a wiki and register it as a project (then make it active).");
+    create.Arguments.Add(createName);
+    create.Options.Add(linkStyle);
+    create.SetAction(async (pr, ct) =>
+    {
+        await using var provider = BuildProvider();
+        var repo = provider.GetRequiredService<IWikiRepository>();
+        var projects = provider.GetRequiredService<IProjectRepository>();
+        var current = provider.GetRequiredService<ICurrentProjectStore>();
+
+        var name = pr.GetValue(createName)!;
+        var schema = new WikiSchema { WikiName = name, LinkStyle = pr.GetValue(linkStyle) };
+        await repo.CreateWikiAsync(schema, ct);
+        Console.WriteLine($"Created wiki '{name}' ({schema.LinkStyle}).");
+
+        // Registration is best-effort — files are canonical, so an Oracle outage never fails create (NFR-06).
+        try { await projects.RegisterAsync(name, ct); }
+        catch (Exception ex) { await Console.Error.WriteLineAsync($"warning: could not register project in Oracle — {ex.Message}"); }
+
+        await current.SetAsync(name, ct);
+        Console.WriteLine($"Active project: {name}");
+        return 0;
+    });
+    project.Subcommands.Add(create);
+
+    // list
+    var list = new Command("list", "List registered projects and their metadata (from Oracle).");
+    list.SetAction(async (_, ct) =>
+    {
+        await using var provider = BuildProvider();
+        var projects = provider.GetRequiredService<IProjectRepository>();
+        var current = provider.GetRequiredService<ICurrentProjectStore>();
+
+        var active = await current.GetAsync(ct);
+        var all = await projects.ListAsync(ct);
+        if (all.Count == 0) { Console.WriteLine("No projects registered."); return 0; }
+        foreach (var p in all)
+        {
+            var marker = p.Name == active ? "*" : " ";
+            var lastIngest = p.LastIngestAt?.ToString("yyyy-MM-dd") ?? "never";
+            Console.WriteLine(
+                $"{marker} {p.Name,-20} created {p.CreatedAt:yyyy-MM-dd}  last-ingest {lastIngest,-10}  {p.PageCount} page(s)  {p.SourceCount} source(s)");
+        }
+        return 0;
+    });
+    project.Subcommands.Add(list);
+
+    // select
+    var selectName = new Argument<string>("name") { Description = "Project to make active." };
+    var select = new Command("select", "Persist the active project (subsequent commands may omit the name).");
+    select.Arguments.Add(selectName);
+    select.SetAction(async (pr, ct) =>
+    {
+        await using var provider = BuildProvider();
+        var repo = provider.GetRequiredService<IWikiRepository>();
+        var projects = provider.GetRequiredService<IProjectRepository>();
+        var current = provider.GetRequiredService<ICurrentProjectStore>();
+
+        var name = pr.GetValue(selectName)!;
+        if (!await repo.WikiExistsAsync(name, ct))
+        {
+            await Console.Error.WriteLineAsync($"Wiki '{name}' not found.");
+            return 1;
+        }
+        await current.SetAsync(name, ct);
+        try { await projects.RegisterAsync(name, ct); }
+        catch (Exception ex) { await Console.Error.WriteLineAsync($"warning: could not register project in Oracle — {ex.Message}"); }
+        Console.WriteLine($"Active project: {name}");
+        return 0;
+    });
+    project.Subcommands.Add(select);
+
+    return project;
 }
 
 // wiki and page management commands.
