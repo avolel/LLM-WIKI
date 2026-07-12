@@ -47,6 +47,15 @@ See
 [docs/adr/0003-phase-7-lint.md](docs/adr/0003-phase-7-lint.md), and
 [docs/adr/0004-phase-8-client.md](docs/adr/0004-phase-8-client.md).
 
+## User manual
+
+New to the app? The [**User Manual**](docs/user-manual/user-manual.md) is a friendly, screenshot-led
+walkthrough of the web client: asking questions, reading sources, browsing pages, managing projects,
+and checking status — plus a plain-English glossary. Here is the Chat tab answering a question, with
+tappable source chips and a Save answer button:
+
+![The LLM Wiki Chat tab showing a grounded answer with source chips](docs/images/Screenshot%20from%202026-07-12%2013-27-07.png)
+
 ## Layout
 
 ```
