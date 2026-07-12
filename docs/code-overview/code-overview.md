@@ -47,10 +47,10 @@ Domain  ←  Application (ports)  ←  Infrastructure (adapters: Oracle, Ollama,
 | **`LlmWiki.Domain`** | Pure business types and pure functions (entities + renderers). No I/O, no framework. | nothing |
 | **`LlmWiki.Application`** | **Ports** (interfaces the app needs) + orchestration contracts/DTOs. Defines *what* is needed, not *how*. | Domain |
 | **`LlmWiki.Infrastructure`** | **Adapters** — the real implementations of every port (Oracle, Ollama, OpenAI/Anthropic, file store). Owns *all* Semantic Kernel + Oracle wiring. | Application, Shared |
-| **`LlmWiki.Agents`** | LLM agent orchestration. Today: the ingestion pipeline, the backfill indexer, and the query/synthesis service — all written against ports only (no SK types) so they stay unit-testable. | Application, Shared |
+| **`LlmWiki.Agents`** | LLM agent orchestration. Today: the ingestion pipeline, the backfill indexer, the query/synthesis service, and the lint/health-check service — all written against ports only (no SK types) so they stay unit-testable. | Application, Shared |
 | **`LlmWiki.Shared`** | Cross-cutting config: `env/.env` loading + strongly-typed options. A leaf with no project deps. | nothing |
-| **`LlmWiki.Api`** | ASP.NET host — minimal APIs (`/health`, `/diagnostics`) **plus** the Phase 5 `POST /query` and Phase 6 `GET`·`POST /projects` MVC controllers and Swagger UI. A thin **composition root**. | Infrastructure, Agents, Shared |
-| **`LlmWiki.Cli`** | Command-line host (`doctor`, `wiki`, `ingest`, `search`, `reindex`, `ask`). The other composition root. | Infrastructure, Agents, Shared |
+| **`LlmWiki.Api`** | ASP.NET host — minimal APIs (`/health`, `/diagnostics`) **plus** the Phase 5 `POST /query`, Phase 6 `GET`·`POST /projects`, and Phase 7 `POST /lint`·`/lint/apply` MVC controllers and Swagger UI. A thin **composition root**. | Infrastructure, Agents, Shared |
+| **`LlmWiki.Cli`** | Command-line host (`doctor`, `wiki`, `ingest`, `search`, `reindex`, `ask`, `project`, `lint`). The other composition root. | Infrastructure, Agents, Shared |
 
 **Why this matters when you edit code:** if you find yourself wanting to `using Oracle.…` or
 `using Microsoft.SemanticKernel` in Domain, Application, or (for SK) Agents, stop — that's a smell.
@@ -77,6 +77,7 @@ orchestration code only ever sees interfaces.
 | [`IIngestionService`](../../src/LlmWiki.Application/Ingestion/IIngestionService.cs) | `IngestionService` (Agents) | The whole ingest pipeline. |
 | [`IWikiIndexer`](../../src/LlmWiki.Application/Indexing/IWikiIndexer.cs) | `WikiIndexer` (Agents) | Backfill: embed every existing page of a wiki into the vector store. |
 | [`IQueryService`](../../src/LlmWiki.Application/Query/IQueryService.cs) | `QueryService` (Agents) | Query/synthesis: index → hybrid search → read candidates → cited answer; save an answer back as a page. |
+| [`ILintService`](../../src/LlmWiki.Application/Linting/ILintService.cs) | `LintService` (Agents) | Lint/health-check: structural pass (broken links, orphans, thin pages) + one LLM call (contradictions, stale claims, suggestions) → prioritised report; apply a stub-creation fix (Phase 7). |
 
 ---
 
@@ -204,7 +205,7 @@ The API host calls `builder.Configuration.AddLlmWikiEnv()`; the CLI calls
 `LlmWikiConfiguration.Build()`. Both then call
 [`AddLlmWikiInfrastructure`](../../src/LlmWiki.Infrastructure/DependencyInjection.cs) (wires every
 adapter + owns SK/Oracle) and `AddLlmWikiAgents` (wires the ingestion service, the backfill indexer,
-and the query service).
+the query service, and the lint service).
 
 > **To add a new setting:** add it in three places — `env/.env.example`, the options class, and the
 > `EnvToConfigKey` map. (That's how `EMBEDDING_STRATEGY` was added in Phase 4.)
@@ -399,6 +400,43 @@ selectable "active project":
 The registry stays current because ingestion's **step 10** (above) stamps `last_ingest_at` + counts
 best-effort on every run.
 
+### 6h. Lint / health-check — `lint [wiki] [--fix|--report]` / `POST /lint`·`/lint/apply` (Phase 7)
+
+The maintenance half of the value proposition: keep a wiki *internally consistent* (the reason a
+compiled wiki beats plain RAG). [`LintService`](../../src/LlmWiki.Agents/Linting/LintService.cs) is a
+**plain orchestrator** (ports only, no SK — the same shape as `QueryService`), computing findings two
+ways and merging them:
+
+- **Structural pass (deterministic, reliable).** For each page it reuses
+  [`IWikiRepository.ResolveLinksAsync`](../../src/LlmWiki.Infrastructure/FileStore/FileSystemWikiRepository.cs)
+  — the resolved links feed an inbound-link graph (**orphans** = pages nothing links to) and each
+  unresolved link is a **broken-link** warning. When the intended target normalizes to an unambiguous
+  typed path (`concepts/anvil.md` under a known typed dir), the finding is upgraded to a **missing
+  page** carrying a stub-creation `Fix`. Pages under the thin-content threshold (200 chars) become
+  **thin-page** suggestions. No new parsing code.
+- **Semantic pass (one best-effort LLM call).** A single JSON-mode
+  [`LintPrompts.Analyze`](../../src/LlmWiki.Agents/Prompts/LintPrompts.cs) call over the page digest
+  returns **contradictions** (both page paths), **stale claims**, and suggested **questions/sources**
+  ([`LintAnalysis`](../../src/LlmWiki.Application/Linting/LintAnalysis.cs), parsed via the shared
+  fence-stripper). A chat/parse failure drops the semantic findings but the structural report still
+  returns (NFR-06). LLM-cited pages are filtered to those that actually exist.
+
+Findings are sorted **critical → warning → suggestion** (BR-061) into a
+[`LintReport`](../../src/LlmWiki.Application/Linting/LintReport.cs); a `lint` line is appended to
+`log.md` best-effort. **Applying a fix** ([`ApplyFixAsync`](../../src/LlmWiki.Agents/Linting/LintService.cs))
+is the *only* page mutation this phase and mirrors `SaveAnswerAsync` exactly: write the stub page
+(write boundary), then **best-effort** rebuild the index, append a `lint` log line, and embed — a
+journal/embed failure is recorded on the `PageOutcome.Detail`, never thrown. Report-only findings
+(contradictions, orphans, stale, suggestions) carry no `Fix`.
+
+- **CLI** — `lint [wiki] [--fix] [--report]`: the wiki defaults to the active project; `--report`
+  prints only (never prompts, exit non-zero iff a critical finding exists); `--fix` auto-applies every
+  fix-bearing finding; the default is an interactive **accept / reject / modify-title / quit** loop
+  (BR-063), modelled on the `ask` REPL.
+- **API** — [`LintController`](../../src/LlmWiki.Api/Controllers/LintController.cs): `POST /lint`
+  returns the report; `POST /lint/apply` applies one finding the client echoes back (404 unknown wiki,
+  400 fixless finding, 422 failed apply) — the full report+apply surface the Phase 8 client will drive.
+
 ---
 
 ## 7. Cross-cutting conventions
@@ -419,7 +457,7 @@ Adapters for phases not yet built are **registered in DI but throw**
 `NotImplementedException("… not implemented until Phase N")`, so accidental use fails loudly instead
 of silently doing nothing. When you implement a later phase, you **fill the existing stub** (as
 Phase 4 did to `OracleVectorStore` and Phase 6 did to `OracleProjectRepository`) — you don't add a
-parallel type. No application-adapter stubs remain (Phase 7's linting/health-check is not yet wired).
+parallel type. No application-adapter stubs remain — Phase 7's linting/health-check is now wired, leaving only Phase 8's React-Native client unbuilt.
 
 ### Security
 
@@ -447,6 +485,7 @@ committed credential. Options classes that hold keys are never logged.
 | 4 | Hybrid retrieval: per-page embeddings + Oracle Text, embed-on-change, `search` CLI | ✅ real |
 | 5 | Query/synthesis: index → hybrid search → cited answer; `ask` REPL + `POST /query`; save-answer | ✅ real |
 | 6 | Project registry: Oracle `wiki_project` metadata, `project` CLI + `/projects` API, active-project pointer, best-effort ingest metadata | ✅ real |
+| 7 | Lint / health-check: structural + one-LLM-call findings, prioritised report, interactive accept/reject stub-creation, `lint` CLI + `POST /lint`·`/lint/apply` API | ✅ real |
 | 8 | React Native / Expo UI, token streaming, log-into-session-context (BR-023) | 🔲 skeleton in `app/` |
 
 ---
@@ -514,10 +553,14 @@ dotnet run --project src/LlmWiki.Cli -- ask demo                              # 
 dotnet run --project src/LlmWiki.Cli -- project create|select ml-papers       # register + make active
 dotnet run --project src/LlmWiki.Cli -- project list                          # registry; * = active
 dotnet run --project src/LlmWiki.Cli -- ingest|search|ask "…"                 # omit wiki → active project
+dotnet run --project src/LlmWiki.Cli -- lint demo                             # health-check (accept/reject)
+dotnet run --project src/LlmWiki.Cli -- lint demo --report                    # print only; non-zero on critical
+dotnet run --project src/LlmWiki.Cli -- lint demo --fix                       # auto-apply stub-creation fixes
 ```
 
 **API** — `GET /health` (liveness), `GET /diagnostics` (the three checks; 200/503),
-`POST /query` (grounded cited answer), `GET`·`POST /projects` (registry; `/swagger` UI in development).
+`POST /query` (grounded cited answer), `GET`·`POST /projects` (registry),
+`POST /lint`·`/lint/apply` (health-check report + apply; `/swagger` UI in development).
 
 **Infra** — `cd docker && docker compose up -d`, then pull the models
 (`ollama pull nomic-embed-text`, `ollama pull llama3.1`).

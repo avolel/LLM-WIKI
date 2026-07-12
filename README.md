@@ -17,7 +17,13 @@ answer back as a new, itself-indexed `Answer` page; and **Phase 6** adds a first
 registry** — an Oracle-persisted `wiki_project` table of projects + metadata (created / last-ingest /
 page & source counts), a `project` CLI group (`create`/`list`/`select`) and `GET`/`POST /projects`
 API, and a persisted "active project" so `ingest`/`search`/`ask` default to it when you omit the wiki
-name (a project *is* a wiki — isolation is unchanged, this adds the durable registry on top).
+name (a project *is* a wiki — isolation is unchanged, this adds the durable registry on top); and
+**Phase 7** makes the wiki *keep itself consistent* — a `lint` command and `POST /lint`·`/lint/apply`
+endpoints walk the wiki, produce a **prioritised** health report (contradictions and stale claims →
+broken links, orphans, missing pages → thin pages and suggested questions/sources), and let you
+**accept/reject** fixes interactively; structural issues are found deterministically and the semantic
+ones by a single LLM call, and accepting a missing-page finding writes an indexed stub — the only
+page change, always confirmed unless you pass `--fix`.
 See
 [docs/plans/plan-phase-0.md](docs/plans/plan-phase-0.md),
 [docs/plans/plan-phase-1.md](docs/plans/plan-phase-1.md),
@@ -25,10 +31,12 @@ See
 [docs/plans/plan-phase-3.md](docs/plans/plan-phase-3.md),
 [docs/plans/plan-phase-4.md](docs/plans/plan-phase-4.md),
 [docs/plans/plan-phase-5.md](docs/plans/plan-phase-5.md),
-[docs/plans/plan-phase-6.md](docs/plans/plan-phase-6.md), a plain-English
+[docs/plans/plan-phase-6.md](docs/plans/plan-phase-6.md),
+[docs/plans/plan-phase-7.md](docs/plans/plan-phase-7.md), a plain-English
 [code overview for developers](docs/code-overview/code-overview.md), and the architecture decisions in
-[docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md) and
-[docs/adr/0002-phase-6-project-registry.md](docs/adr/0002-phase-6-project-registry.md).
+[docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md),
+[docs/adr/0002-phase-6-project-registry.md](docs/adr/0002-phase-6-project-registry.md), and
+[docs/adr/0003-phase-7-lint.md](docs/adr/0003-phase-7-lint.md).
 
 ## Layout
 
@@ -283,6 +291,49 @@ schema is created automatically on first use (canonical DDL:
 [docker/oracle/03-schema.sql](docker/oracle/03-schema.sql)). The file-only `wiki create` command is
 unchanged for scaffolding a wiki without registering a project.
 
+## Lint / health-check (Phase 7)
+
+Search and `ask` help the wiki *grow*; `lint` keeps it *consistent* — the reason a compiled wiki
+beats plain RAG. It walks a wiki and reports, in priority order:
+
+- **Critical** — contradictions between pages (naming both) and likely-stale claims (found by one LLM call).
+- **Warning** — broken cross-references, **orphan** pages nothing links to, and **missing pages** a
+  link points at (found deterministically by re-resolving every page's links).
+- **Suggestion** — **thin** pages worth expanding, plus research-planning prompts: questions the wiki
+  doesn't yet answer and kinds of source material to seek.
+
+Nothing changes on disk unless you confirm it. Accepting a **missing-page** finding writes a stub page
+(then re-indexes, logs a `lint` line, and embeds it) — the only page-mutating fix this phase; all
+others are report-only.
+
+```bash
+# Interactive: prints the prioritised report, then prompts accept/reject/modify per fixable finding
+dotnet run --project src/LlmWiki.Cli -- lint demo
+
+# Report only — never prompts or writes; exits non-zero iff a critical finding exists (a CI health gate)
+dotnet run --project src/LlmWiki.Cli -- lint demo --report
+
+# Auto-apply every fix-bearing finding without prompting
+dotnet run --project src/LlmWiki.Cli -- lint demo --fix
+
+# With a project selected, the wiki name is optional (defaults to the active project)
+dotnet run --project src/LlmWiki.Cli -- lint
+```
+
+The semantic pass is **best-effort**: if the chat provider is unavailable, `lint` still returns the
+structural findings rather than failing. Applying a fix uses per-step write boundaries — if Oracle is
+down the stub is still written to disk and the embed failure is recorded as a note, never thrown
+(NFR-06); the pass is recorded in `log.md` either way. The same workflow is HTTP-reachable:
+`POST /lint {"wiki":"demo"}` returns the report, and `POST /lint/apply {"wiki":"demo","finding":{…}}`
+applies one finding echoed back from it (via a `LintController` in Swagger) — the full report + apply
+surface the Phase 8 React-Native client will drive.
+
+```bash
+dotnet run --project src/LlmWiki.Api            # http://localhost:5080
+#   browse http://localhost:5080/swagger and invoke POST /lint, or:
+curl -s localhost:5080/lint -H 'content-type: application/json' -d '{"wiki":"demo"}'
+```
+
 ## Configuration
 
 All secrets live in `env/.env` (gitignored); `env/.env.example` documents every key with
@@ -335,11 +386,12 @@ ingest (Phase 4), and the project registry (`wiki_project`: metadata) written be
 and by the `project` commands (Phase 6). `docker/oracle/spike-vector.sql` was the manual spike (R-02)
 that validated `VECTOR` DML + Oracle Text before the real `OracleVectorStore` adapter was built. No
 application-adapter stubs remain — `OracleProjectRepository` is filled (Phase 6). Phase 5 reads the
-index into query context; carrying the log into session context (BR-023), token **streaming** to the
-client, and the React Native chat UI remain Phase 8; linting / a health-check surface are Phase 7.
-Everything else is real: the embedding/chat/Oracle-health diagnostics paths, the file-backed wiki
-store/repository, the journal, the hybrid vector store, the query/synthesis workflow (`ask` REPL +
-`POST /query`), and the project registry (`project` CLI + `/projects` API).
+index into query context, and Phase 7 added the lint / health-check surface; carrying the log into
+session context (BR-023), token **streaming** to the client, and the React Native chat UI remain the
+only unbuilt work (Phase 8). Everything else is real: the embedding/chat/Oracle-health diagnostics
+paths, the file-backed wiki store/repository, the journal, the hybrid vector store, the
+query/synthesis workflow (`ask` REPL + `POST /query`), the project registry (`project` CLI +
+`/projects` API), and the lint / health-check workflow (`lint` CLI + `POST /lint`·`/lint/apply`).
 
 > Note: the .NET 10 SDK emits a solution as `LlmWiki.slnx` (XML solution format). Use
 > `dotnet build LlmWiki.slnx` (or just `dotnet build`).
