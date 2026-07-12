@@ -7,6 +7,7 @@ using LlmWiki.Shared.Configuration;
 using LlmWiki.Agents;
 using LlmWiki.Application.Indexing;
 using LlmWiki.Application.Ingestion;
+using LlmWiki.Application.Linting;
 using LlmWiki.Application.Query;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -22,6 +23,7 @@ root.Subcommands.Add(BuildIngestCommand());
 root.Subcommands.Add(BuildSearchCommand());
 root.Subcommands.Add(BuildReindexCommand());
 root.Subcommands.Add(BuildAskCommand());
+root.Subcommands.Add(BuildLintCommand());
 
 return await root.Parse(args).InvokeAsync();
 
@@ -214,6 +216,87 @@ static Command BuildReindexCommand()
         return report.HasFailures ? 1 : 0;
     });
     return reindex;
+}
+
+// Phase 7: health-check a wiki. `wiki` is optional (defaults to the active project). `--fix`
+// auto-applies every fix-bearing finding; `--report` prints only (never prompts, never writes);
+// default is an interactive accept/reject/modify loop modelled on the `ask` REPL (BR-063).
+static Command BuildLintCommand()
+{
+    var wikiArg = new Argument<string?>("wiki")
+    {
+        Description = "Wiki to lint (defaults to the active project).",
+        Arity = ArgumentArity.ZeroOrOne,
+    };
+    var fix = new Option<bool>("--fix") { Description = "Auto-apply every suggested fix without prompting." };
+    var report = new Option<bool>("--report") { Description = "Print the report only; never prompt or change pages." };
+
+    var lint = new Command("lint", "Health-check a wiki: report contradictions, orphans, broken links, gaps.");
+    lint.Arguments.Add(wikiArg);
+    lint.Options.Add(fix);
+    lint.Options.Add(report);
+
+    lint.SetAction(async (pr, ct) =>
+    {
+        await using var provider = BuildProvider();
+        var repo = provider.GetRequiredService<IWikiRepository>();
+        var current = provider.GetRequiredService<ICurrentProjectStore>();
+        var svc = provider.GetRequiredService<ILintService>();
+
+        var wikiName = await ResolveWikiAsync(repo, current, pr.GetValue(wikiArg), ct);
+        if (wikiName is null) return 1;
+
+        var result = await svc.LintAsync(wikiName, ct);
+        if (result.IsClean) { Console.WriteLine("No issues found. ✓"); return 0; }
+
+        Console.WriteLine($"{result.Findings.Count} finding(s) — {result.CriticalCount} critical, {result.WarningCount} warning:");
+        foreach (var f in result.Findings)
+        {
+            PrintFinding(f);
+            var applyable = f.Fix is not null && !pr.GetValue(report);
+            if (!applyable) continue;
+
+            if (pr.GetValue(fix))               // auto-fix mode (BR-063)
+            {
+                await ApplyAndReportAsync(svc, wikiName, f, ct);
+                continue;
+            }
+
+            // interactive accept/reject/modify (BR-063)
+            Console.Write("   apply? [a]ccept / [r]eject / [m]odify title / [q]uit: ");
+            var choice = Console.ReadLine()?.Trim().ToLowerInvariant();
+            if (choice is "q") break;
+            if (choice is "a") await ApplyAndReportAsync(svc, wikiName, f, ct);
+            else if (choice is "m")
+            {
+                Console.Write("   new title: ");
+                var title = Console.ReadLine()?.Trim();
+                if (!string.IsNullOrWhiteSpace(title))
+                {
+                    var edited = f with { Fix = f.Fix! with { Title = title } };
+                    await ApplyAndReportAsync(svc, wikiName, edited, ct);
+                }
+            }
+        }
+        // --report is a health gate: non-zero when critical findings exist.
+        return pr.GetValue(report) && result.CriticalCount > 0 ? 1 : 0;
+    });
+    return lint;
+}
+
+static void PrintFinding(LintFinding f)
+{
+    var pages = f.Pages.Count > 0 ? $"  ({string.Join(", ", f.Pages)})" : "";
+    Console.WriteLine($"  [{f.Severity,-10}] {f.Category,-16} {f.Summary}{pages}");
+    if (f.SuggestedAction is not null) Console.WriteLine($"     → {f.SuggestedAction}");
+}
+
+static async Task ApplyAndReportAsync(ILintService svc, string wiki, LintFinding f, CancellationToken ct)
+{
+    var o = await svc.ApplyFixAsync(wiki, f, ct);
+    Console.WriteLine(o.Change == PageChange.Failed
+        ? $"   apply failed: {o.Detail}"
+        : $"   created {o.RelativePath}{(o.Detail is null ? "" : $" (note: {o.Detail})")}");
 }
 
 // Phase 5: query/synthesis. With a question, answer once and exit; without one, open a REPL that

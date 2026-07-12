@@ -1,4 +1,5 @@
 using LlmWiki.Agents;
+using LlmWiki.Application.Linting;
 using LlmWiki.Application.Query;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -25,5 +26,16 @@ public class AgentsRegistrationTests
 
         //the query orchestrator is wired behind its port.
         Assert.Contains(services, d => d.ServiceType == typeof(IQueryService));
+    }
+
+    [Fact]
+    public void AddLlmWikiAgents_RegistersLintService()
+    {
+        var services = new ServiceCollection();
+
+        services.AddLlmWikiAgents();
+
+        //the lint orchestrator is wired behind its port (Phase 7).
+        Assert.Contains(services, d => d.ServiceType == typeof(ILintService));
     }
 }

@@ -1,8 +1,10 @@
 using LlmWiki.Agents.Indexing;
 using LlmWiki.Agents.Ingestion;
+using LlmWiki.Agents.Linting;
 using LlmWiki.Agents.Query;
 using LlmWiki.Application.Indexing;
 using LlmWiki.Application.Ingestion;
+using LlmWiki.Application.Linting;
 using LlmWiki.Application.Query;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -20,6 +22,7 @@ public static class DependencyInjection
         services.AddSingleton<IIngestionService, IngestionService>();        
         services.AddSingleton<IWikiIndexer, WikiIndexer>();
         services.AddSingleton<IQueryService, QueryService>();
+        services.AddSingleton<ILintService, LintService>();
         return services;
     }
 }
