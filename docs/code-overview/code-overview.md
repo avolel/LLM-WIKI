@@ -49,7 +49,7 @@ Domain  ←  Application (ports)  ←  Infrastructure (adapters: Oracle, Ollama,
 | **`LlmWiki.Infrastructure`** | **Adapters** — the real implementations of every port (Oracle, Ollama, OpenAI/Anthropic, file store). Owns *all* Semantic Kernel + Oracle wiring. | Application, Shared |
 | **`LlmWiki.Agents`** | LLM agent orchestration. Today: the ingestion pipeline, the backfill indexer, the query/synthesis service, and the lint/health-check service — all written against ports only (no SK types) so they stay unit-testable. | Application, Shared |
 | **`LlmWiki.Shared`** | Cross-cutting config: `env/.env` loading + strongly-typed options. A leaf with no project deps. | nothing |
-| **`LlmWiki.Api`** | ASP.NET host — minimal APIs (`/health`, `/diagnostics`) **plus** the Phase 5 `POST /query`, Phase 6 `GET`·`POST /projects`, Phase 7 `POST /lint`·`/lint/apply`, and Phase 8 `GET /wikis/{wiki}/pages`·`GET /wikis/{wiki}/pages/{path}`·`POST /query/save` MVC controllers and Swagger UI; Phase 8 also turns on CORS + string-enum JSON. A thin **composition root**. | Infrastructure, Agents, Shared |
+| **`LlmWiki.Api`** | ASP.NET host — minimal APIs (`/health`, `/diagnostics`) **plus** the Phase 5 `POST /query`, Phase 6 `GET`·`POST`·`DELETE /projects`, Phase 7 `POST /lint`·`/lint/apply`, and Phase 8 `GET /wikis/{wiki}/pages`·`GET /wikis/{wiki}/pages/{path}`·`POST /query/save` MVC controllers and Swagger UI; Phase 8 also turns on CORS + string-enum JSON. A thin **composition root**. | Infrastructure, Agents, Shared |
 | **`LlmWiki.Cli`** | Command-line host (`doctor`, `wiki`, `ingest`, `search`, `reindex`, `ask`, `project`, `lint`). The other composition root. | Infrastructure, Agents, Shared |
 
 **Why this matters when you edit code:** if you find yourself wanting to `using Oracle.…` or
@@ -65,15 +65,15 @@ orchestration code only ever sees interfaces.
 
 | Port | Adapter | What it does |
 |---|---|---|
-| [`IWikiFileStore`](../../src/LlmWiki.Application/Ports/IWikiFileStore.cs) | `FileSystemWikiFileStore` | Raw read/write/list of files under `WIKI_ROOT`. |
-| [`IWikiRepository`](../../src/LlmWiki.Application/Ports/IWikiRepository.cs) | `FileSystemWikiRepository` | Wiki-aware operations: scaffold wikis, read/write pages with frontmatter, list, resolve links. |
+| [`IWikiFileStore`](../../src/LlmWiki.Application/Ports/IWikiFileStore.cs) | `FileSystemWikiFileStore` | Raw read/write/list of files under `WIKI_ROOT`, plus recursive `DeleteAsync` (guarded by the same path-escape check). |
+| [`IWikiRepository`](../../src/LlmWiki.Application/Ports/IWikiRepository.cs) | `FileSystemWikiRepository` | Wiki-aware operations: scaffold wikis, read/write pages with frontmatter, list, resolve links, and delete a whole wiki. |
 | [`IWikiJournal`](../../src/LlmWiki.Application/Ports/IWikiJournal.cs) | `FileSystemWikiJournal` | Maintains `index.md` (regenerated) and `log.md` (append-only). |
 | [`IChatService`](../../src/LlmWiki.Application/Ports/IChatService.cs) | `SemanticKernelChatService` / `NotConfiguredChatService` | One-shot LLM completion, optional JSON mode. |
 | [`IEmbeddingService`](../../src/LlmWiki.Application/Ports/IEmbeddingService.cs) | `OllamaEmbeddingService` | Turn text into a 768-dim vector. |
-| [`IVectorStore`](../../src/LlmWiki.Application/Ports/IVectorStore.cs) | `OracleVectorStore` | Upsert page embeddings + hybrid (vector + full-text) search in Oracle. |
+| [`IVectorStore`](../../src/LlmWiki.Application/Ports/IVectorStore.cs) | `OracleVectorStore` | Upsert page embeddings + hybrid (vector + full-text) search in Oracle, and purge all of a wiki's rows. |
 | [`IDatabaseHealthCheck`](../../src/LlmWiki.Application/Ports/IDatabaseHealthCheck.cs) | `OracleDatabaseHealthCheck` | Connectivity probe (CREATE TABLE round-trip). |
-| [`IProjectRepository`](../../src/LlmWiki.Application/Ports/IProjectRepository.cs) | `OracleProjectRepository` | Project registry: register/list/get projects + record ingest metadata in Oracle `wiki_project` (Phase 6). |
-| [`ICurrentProjectStore`](../../src/LlmWiki.Application/Ports/ICurrentProjectStore.cs) | `FileCurrentProjectStore` | Host-local active-project pointer (`{WIKI_ROOT}/.current-project`) — offline, no Oracle (Phase 6). |
+| [`IProjectRepository`](../../src/LlmWiki.Application/Ports/IProjectRepository.cs) | `OracleProjectRepository` | Project registry: register/list/get/**delete** projects + record ingest metadata in Oracle `wiki_project` (Phase 6). |
+| [`ICurrentProjectStore`](../../src/LlmWiki.Application/Ports/ICurrentProjectStore.cs) | `FileCurrentProjectStore` | Host-local active-project pointer (`{WIKI_ROOT}/.current-project`) — get/set/**clear**, offline, no Oracle (Phase 6). |
 | [`IIngestionService`](../../src/LlmWiki.Application/Ingestion/IIngestionService.cs) | `IngestionService` (Agents) | The whole ingest pipeline. |
 | [`IWikiIndexer`](../../src/LlmWiki.Application/Indexing/IWikiIndexer.cs) | `WikiIndexer` (Agents) | Backfill: embed every existing page of a wiki into the vector store. |
 | [`IQueryService`](../../src/LlmWiki.Application/Query/IQueryService.cs) | `QueryService` (Agents) | Query/synthesis: index → hybrid search → read candidates → cited answer; save an answer back as a page. |
@@ -483,6 +483,43 @@ Every network call has explicit loading + error states (NFR-08). **Deferred** (d
 SSE/token streaming (loading-state-only stands in for BR-074 now), native device verification, and any
 ingestion or lint UI — ingestion stays CLI-only (BR-075, shipped in Phase 2).
 
+### 6j. Delete a wiki/project — `project delete`·`wiki delete` / `DELETE /projects/{name}`
+
+Completing the BR-050 lifecycle (create → use → **delete**). Because a **project is a wiki**, "delete a
+project" and "delete a wiki" are one full teardown of all four of a wiki's artifacts:
+
+1. the on-disk directory under `{WIKI_ROOT}/{name}` — pages, `index.md`/`log.md`, and the `raw/` sources;
+2. the Oracle embeddings (`wiki_page` rows where `wiki_name = name`);
+3. the Oracle registry row (`wiki_project` where `name = name`);
+4. (CLI only) the host-local `.current-project` pointer, if it named the deleted wiki.
+
+**No new orchestration service** — matching how `create` coordinates its ports inline at each
+composition root, delete adds four small **primitives** to already-registered ports
+(`IWikiFileStore.DeleteAsync` — a recursive delete reusing the existing `Resolve` escape-guard;
+`IWikiRepository.DeleteWikiAsync`, which delegates to it; `IVectorStore.DeleteWikiAsync` and
+`IProjectRepository.DeleteAsync`, each a single `DELETE … WHERE`-scoped statement using the established
+`OpenAsync` + `BindByName` shape; plus `ICurrentProjectStore.ClearAsync`) and coordinates them at the
+call sites. **Teardown order** is the same everywhere: guard `WikiExistsAsync` → delete the disk dir
+(canonical, so it goes first and a real IO error *does* surface) → best-effort purge embeddings →
+best-effort delete the registry row → (CLI) clear the pointer if active. The Oracle steps are wrapped
+in try/catch and only warn, so a DB outage never blocks removing the canonical on-disk wiki — the same
+NFR-06 posture as the create path.
+
+- **CLI** — a shared `DeleteWikiAsync` helper (near `ResolveWikiAsync` in
+  [`Program.cs`](../../src/LlmWiki.Cli/Program.cs)) is wired as a `delete` subcommand into **both**
+  `BuildProjectCommand()` and `BuildWikiCommand()` (they run the identical teardown). It prints a
+  `y/N` confirmation naming what will be destroyed unless `-y/--yes` is passed, and exits non-zero with
+  a clear message if the wiki doesn't exist.
+- **API** — [`ProjectController.DeleteAsync`](../../src/LlmWiki.Api/Controllers/ProjectController.cs)
+  (`DELETE /projects/{name}`) runs steps 1–3 → `204 No Content` (`404` if the wiki is absent). It
+  **deliberately does not** touch `ICurrentProjectStore`: the active pointer is CLI/host-local, exactly
+  like `select` has no endpoint. The web client clears its own remembered project via
+  `setActiveProject(null)` (which clears `localStorage`) when it deletes the active one. `IVectorStore`
+  was added to the controller's constructor for step 2.
+
+See [the plan](../plans/plan-delete-wiki-project.md) for the locked decisions (full teardown incl.
+`raw/`; confirmation on both surfaces; the command in both CLI groups).
+
 ---
 
 ## 7. Cross-cutting conventions
@@ -534,6 +571,7 @@ committed credential. Options classes that hold keys are never logged.
 | 6 | Project registry: Oracle `wiki_project` metadata, `project` CLI + `/projects` API, active-project pointer, best-effort ingest metadata | ✅ real |
 | 7 | Lint / health-check: structural + one-LLM-call findings, prioritised report, interactive accept/reject stub-creation, `lint` CLI + `POST /lint`·`/lint/apply` API | ✅ real |
 | 8 | Expo (web-first) client — chat/citations/browse/projects — + `GET /wikis/{wiki}/pages(/{path})`·`POST /query/save`, CORS, string-enum JSON | ✅ real (token streaming deferred) |
+| 8+ | Wiki/project **deletion** — full teardown (disk + embeddings + registry + pointer) via `project`·`wiki delete` CLI and `DELETE /projects/{name}`; delete button on the client's Projects tab | ✅ real |
 
 ---
 
@@ -545,8 +583,11 @@ ports.
 
 - **Domain tests** — pure renderers/parsers (index grouping, log format, slug, cross-references).
 - **Infrastructure tests** — file store / repository / journal over a real temp directory; DI
-  resolves every port. `OracleVectorStoreTests` is an **opt-in integration test**: it no-ops unless
-  `ORACLE_CONNECTION_STRING` points at a live 23ai container, so CI without a database stays green.
+  resolves every port. `FileSystemWikiFileStoreTests` covers `DeleteAsync` (removes a directory tree,
+  no-ops on a missing path, and the escape-guard still rejects `../` traversal). `OracleVectorStoreTests`
+  and `OracleProjectRepositoryTests` are **opt-in integration tests**: they no-op unless
+  `ORACLE_CONNECTION_STRING` points at a live 23ai container (so CI without a database stays green), and
+  each covers its `DeleteWikiAsync`/`DeleteAsync` teardown among the other cases.
 - **Agents tests** — the ingestion pipeline with a `ScriptedChat` fake (returns canned extraction /
   reconcile JSON), a `FakeEmbeddingService`, and a `FakeVectorStore` that records upserts. These
   assert the pipeline's *behavior* — e.g. every changed page is embedded exactly once, a
@@ -555,7 +596,9 @@ ports.
 - **Api tests** — host the API via `WebApplicationFactory` (`Program` is exposed `partial` for this).
   `QueryEndpointTests` overrides `IQueryService` and `IWikiRepository` with fakes in
   `ConfigureTestServices`, so `POST /query` is exercised (200 + result, 404 for a missing wiki) with no
-  Oracle/LLM.
+  Oracle/LLM. `ProjectEndpointTests` swaps in fakes for the registry, repository, and vector store to
+  cover `DELETE /projects/{name}` (204 then the follow-up `GET` is 404; a missing name → 404) alongside
+  create/list.
 - **Query (Agents) tests** — `QueryServiceTests` seeds a temp-dir wiki with real pages, a
   `ScriptedChat` returns canned `SynthesisResult` JSON, and a fake vector store returns hits for the
   seeded paths. They assert citations resolve to real pages, `covered:false` flows through, a saved
@@ -599,6 +642,7 @@ dotnet run --project src/LlmWiki.Cli -- ask demo "how does the thing work?"   # 
 dotnet run --project src/LlmWiki.Cli -- ask demo                              # REPL (:save, :quit)
 dotnet run --project src/LlmWiki.Cli -- project create|select ml-papers       # register + make active
 dotnet run --project src/LlmWiki.Cli -- project list                          # registry; * = active
+dotnet run --project src/LlmWiki.Cli -- project|wiki delete ml-papers [--yes] # full teardown (prompts unless --yes)
 dotnet run --project src/LlmWiki.Cli -- ingest|search|ask "…"                 # omit wiki → active project
 dotnet run --project src/LlmWiki.Cli -- lint demo                             # health-check (accept/reject)
 dotnet run --project src/LlmWiki.Cli -- lint demo --report                    # print only; non-zero on critical
@@ -606,8 +650,8 @@ dotnet run --project src/LlmWiki.Cli -- lint demo --fix                       # 
 ```
 
 **API** — `GET /health` (liveness), `GET /diagnostics` (the three checks; 200/503),
-`POST /query` (grounded cited answer), `GET`·`POST /projects` (registry),
-`POST /lint`·`/lint/apply` (health-check report + apply; `/swagger` UI in development).
+`POST /query` (grounded cited answer), `GET`·`POST /projects` (registry) + `DELETE /projects/{name}`
+(teardown → 204), `POST /lint`·`/lint/apply` (health-check report + apply; `/swagger` UI in development).
 
 **Infra** — `cd docker && docker compose up -d`, then pull the models
 (`ollama pull nomic-embed-text`, `ollama pull llama3.1`).

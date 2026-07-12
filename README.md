@@ -300,6 +300,26 @@ schema is created automatically on first use (canonical DDL:
 [docker/oracle/03-schema.sql](docker/oracle/03-schema.sql)). The file-only `wiki create` command is
 unchanged for scaffolding a wiki without registering a project.
 
+### Deleting a project/wiki
+
+Because a **project is a wiki**, deleting one is a single, complete teardown of all four of its
+artifacts — the on-disk directory (pages, `index.md`/`log.md`, and the immutable `raw/` sources),
+the Oracle embeddings (`wiki_page` rows), the registry row (`wiki_project`), and — for the CLI — the
+host-local active-project pointer if it named the deleted wiki. The command lives in **both** groups
+(they run the same teardown) and prompts for confirmation unless you pass `--yes`:
+
+```bash
+dotnet run --project src/LlmWiki.Cli -- project delete ml-papers        # y/N prompt, then teardown
+dotnet run --project src/LlmWiki.Cli -- wiki delete ml-papers --yes     # same, skipping the prompt
+```
+
+The on-disk wiki is **canonical**, so it's removed first; purging the Oracle embeddings and the
+registry row are **best-effort** (a DB outage warns but never blocks the delete — NFR-06). Deleting a
+name that doesn't exist exits non-zero with a clear message. Over HTTP,
+`DELETE /projects/{name}` performs the same teardown → `204 No Content` (`404` if the wiki is absent);
+it deliberately does **not** touch the active-project pointer, which is CLI/host-local (just like
+`select` has no endpoint) — the web client clears its own remembered project instead.
+
 ## Lint / health-check (Phase 7)
 
 Search and `ask` help the wiki *grow*; `lint` keeps it *consistent* — the reason a compiled wiki
@@ -349,7 +369,8 @@ A web-first **Expo (React Native)** client puts a human-usable front end on the 
 **Chat** tab (grounded, cited answers with a spinner while it thinks; tap a citation to open the cited
 page; follow-up questions keep context; **Save answer** persists a good answer as a new page), a
 **Browse** tab (the wiki's pages grouped by category, tap to read, pull to refresh), a **Projects** tab
-(list/create/select the active project with its page/source counts), and a **Status** tab (the Phase-0
+(list/create/select/**delete** the active project with its page/source counts; delete asks for
+confirmation and clears the remembered project if it was active), and a **Status** tab (the Phase-0
 diagnostics). It talks only to the API over one typed `client.ts`, and is deliberately
 minimal-dependency — a custom tab switcher and a small custom markdown renderer, no navigation or
 markdown library.
