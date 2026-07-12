@@ -59,4 +59,12 @@ public sealed class FileSystemWikiFileStore : IWikiFileStore
         }
         return full;
     }
+
+    public Task DeleteAsync(string relativePath, CancellationToken cancellationToken = default)
+    {
+        var full = Resolve(relativePath);
+        if (Directory.Exists(full)) Directory.Delete(full, recursive: true);
+        else if (File.Exists(full)) File.Delete(full);
+        return Task.CompletedTask;
+    }
 }

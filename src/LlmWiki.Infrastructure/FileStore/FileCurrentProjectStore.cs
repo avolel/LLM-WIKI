@@ -13,6 +13,12 @@ public sealed class FileCurrentProjectStore(IOptions<WikiOptions> options) : ICu
     private readonly string _path =
         Path.Combine(Path.GetFullPath(options.Value.RootPath), ".current-project");
 
+    public Task ClearAsync(CancellationToken cancellationToken = default)
+    {
+        if (File.Exists(_path)) File.Delete(_path);
+        return Task.CompletedTask;
+    }
+
     public async Task<string?> GetAsync(CancellationToken ct = default)
     {
         if (!File.Exists(_path)) return null;

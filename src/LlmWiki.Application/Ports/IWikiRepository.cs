@@ -27,4 +27,6 @@ public interface IWikiRepository
     Task<IReadOnlyList<string>> ListPagesAsync(string wikiName, CancellationToken cancellationToken = default);
 
     Task<LinkResolutionReport> ResolveLinksAsync(string wikiName, string relativePath, CancellationToken cancellationToken = default);
+
+    Task DeleteWikiAsync(string wikiName, CancellationToken cancellationToken = default);
 }

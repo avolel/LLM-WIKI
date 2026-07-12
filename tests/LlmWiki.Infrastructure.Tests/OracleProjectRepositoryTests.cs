@@ -71,6 +71,29 @@ public sealed class OracleProjectRepositoryTests
         }
     }
 
+    [Fact]
+    public async Task Delete_RemovesRow_FromGetAndList()
+    {
+        if (string.IsNullOrWhiteSpace(ConnectionString)) return;
+
+        var name = $"itest_{Guid.NewGuid():N}";
+        var repo = NewRepo();
+        try
+        {
+            await repo.RegisterAsync(name);
+            Assert.NotNull(await repo.GetAsync(name));
+
+            await repo.DeleteAsync(name);
+
+            Assert.Null(await repo.GetAsync(name));
+            Assert.DoesNotContain(await repo.ListAsync(), p => p.Name == name);
+        }
+        finally
+        {
+            await DeleteProjectAsync(name);   // idempotent belt-and-suspenders cleanup
+        }
+    }
+
     private static async Task DeleteProjectAsync(string name)
     {
         await using var conn = new OracleConnection(ConnectionString);

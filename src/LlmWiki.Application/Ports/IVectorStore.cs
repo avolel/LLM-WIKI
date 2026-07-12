@@ -29,4 +29,6 @@ public interface IVectorStore
     Task<IReadOnlyList<VectorSearchHit>> SearchAsync(
         string wikiName, string queryText, ReadOnlyMemory<float> queryEmbedding,
         int topK, PageType? typeFilter = null, CancellationToken cancellationToken = default);
+
+    Task DeleteWikiAsync(string wikiName, CancellationToken cancellationToken = default);
 }

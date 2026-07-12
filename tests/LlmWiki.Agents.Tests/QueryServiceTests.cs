@@ -163,6 +163,9 @@ public sealed class QueryServiceTests : IDisposable
             ReadOnlyMemory<float> queryEmbedding, int topK, PageType? typeFilter = null,
             CancellationToken cancellationToken = default)
             => Task.FromResult(hits);
+
+        public Task DeleteWikiAsync(string wikiName, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 
     /// <summary>Returns hits for search, but fails every upsert (simulates Oracle down on save).</summary>
@@ -176,5 +179,8 @@ public sealed class QueryServiceTests : IDisposable
             ReadOnlyMemory<float> queryEmbedding, int topK, PageType? typeFilter = null,
             CancellationToken cancellationToken = default)
             => Task.FromResult(hits);
+
+        public Task DeleteWikiAsync(string wikiName, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("oracle down");
     }
 }

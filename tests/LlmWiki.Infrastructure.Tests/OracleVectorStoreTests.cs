@@ -66,6 +66,34 @@ public sealed class OracleVectorStoreTests
         }
     }
 
+    [Fact]
+    public async Task DeleteWikiAsync_RemovesAllRowsForThatWiki()
+    {
+        if (string.IsNullOrWhiteSpace(ConnectionString)) return;   // opt-in: skip without a live DB
+
+        var wiki = $"itest_{Guid.NewGuid():N}";
+        var store = NewStore();
+        try
+        {
+            var page = new WikiPage
+            {
+                Title = "Domestic cats",
+                Type = PageType.Entity,
+                Content = "A feline kept as a pet; it purrs and hunts mice.",
+            };
+            await store.UpsertAsync(wiki, "entities/cats.md", page, Axis(0), default);
+            Assert.NotEmpty(await store.SearchAsync(wiki, "feline", Axis(0), topK: 2));
+
+            await store.DeleteWikiAsync(wiki);
+
+            Assert.Empty(await store.SearchAsync(wiki, "feline", Axis(0), topK: 2));
+        }
+        finally
+        {
+            await DeleteWikiRowsAsync(wiki);
+        }
+    }
+
     /// <summary>A 768-dim unit vector pointing along one axis — gives well-separated cosine directions.</summary>
     private static ReadOnlyMemory<float> Axis(int index)
     {

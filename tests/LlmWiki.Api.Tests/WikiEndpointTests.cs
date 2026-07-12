@@ -73,6 +73,7 @@ public class WikiEndpointTests(WebApplicationFactory<Program> factory)
                 : throw new FileNotFoundException(relativePath);
 
         public Task CreateWikiAsync(WikiSchema schema, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task DeleteWikiAsync(string wikiName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<WikiInfo>> ListWikisAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<WikiSchema> ReadSchemaAsync(string wikiName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task WritePageAsync(string wikiName, string relativePath, WikiPage page, CancellationToken cancellationToken = default) => throw new NotSupportedException();

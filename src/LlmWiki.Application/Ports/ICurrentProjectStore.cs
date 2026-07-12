@@ -9,4 +9,5 @@ public interface ICurrentProjectStore
 {
     Task<string?> GetAsync(CancellationToken cancellationToken = default);
     Task SetAsync(string name, CancellationToken cancellationToken = default);
+    Task ClearAsync(CancellationToken cancellationToken = default);
 }

@@ -200,6 +200,9 @@ public sealed class LintServiceTests : IDisposable
             ReadOnlyMemory<float> queryEmbedding, int topK, PageType? typeFilter = null,
             CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<VectorSearchHit>>([]);
+
+        public Task DeleteWikiAsync(string wikiName, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 
     private sealed class ThrowingVectorStore : IVectorStore
@@ -212,5 +215,8 @@ public sealed class LintServiceTests : IDisposable
             ReadOnlyMemory<float> queryEmbedding, int topK, PageType? typeFilter = null,
             CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<VectorSearchHit>>([]);
+
+        public Task DeleteWikiAsync(string wikiName, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("oracle down");
     }
 }

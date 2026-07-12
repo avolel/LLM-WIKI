@@ -141,3 +141,14 @@ export const getPage = (wiki: string, relativePath: string) =>
     `/wikis/${encodeURIComponent(wiki)}/pages/` +
       relativePath.split('/').map(encodeURIComponent).join('/'),
   );
+  
+  async function deleteJson(path: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}${path}`, { method: 'DELETE' });
+  if (!response.ok) {
+    throw new Error(`Request to ${path} failed: ${response.status} ${response.statusText}`);
+  }
+}
+
+// ---- projects ----
+export const deleteProject = (name: string) =>
+  deleteJson(`/projects/${encodeURIComponent(name)}`);

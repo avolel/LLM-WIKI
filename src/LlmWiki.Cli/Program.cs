@@ -56,6 +56,41 @@ static async Task<string?> ResolveWikiAsync(
     return name;
 }
 
+static async Task<int> DeleteWikiAsync(string name, bool yes, CancellationToken ct)
+{
+    await using var provider = BuildProvider();
+    var repo = provider.GetRequiredService<IWikiRepository>();
+    var vectors = provider.GetRequiredService<IVectorStore>();
+    var projects = provider.GetRequiredService<IProjectRepository>();
+    var current = provider.GetRequiredService<ICurrentProjectStore>();
+
+    if (!await repo.WikiExistsAsync(name, ct))
+    {
+        await Console.Error.WriteLineAsync($"Wiki '{name}' not found.");
+        return 1;
+    }
+    if (!yes)
+    {
+        Console.Write($"Delete wiki '{name}' and ALL its data (pages, raw sources, embeddings)? [y/N] ");
+        var reply = (Console.ReadLine() ?? "").Trim();
+        if (!reply.Equals("y", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("Aborted.");
+            return 0;
+        }
+    }
+
+    await repo.DeleteWikiAsync(name, ct);                     // canonical
+    try { await vectors.DeleteWikiAsync(name, ct); }
+    catch (Exception ex) { await Console.Error.WriteLineAsync($"warning: could not purge embeddings — {ex.Message}"); }
+    try { await projects.DeleteAsync(name, ct); }
+    catch (Exception ex) { await Console.Error.WriteLineAsync($"warning: could not remove registry row — {ex.Message}"); }
+    if (await current.GetAsync(ct) == name) await current.ClearAsync(ct);
+
+    Console.WriteLine($"Deleted wiki '{name}'.");
+    return 0;
+}
+
 // Two-positional disambiguation for `ingest`/`search` (Phase 6). System.CommandLine binds a lone
 // token to the first (optional) positional, but here a single token is the required payload with the
 // project taken from the active pointer; two tokens mean an explicit <project> <payload>.
@@ -505,6 +540,15 @@ static Command BuildProjectCommand()
     });
     project.Subcommands.Add(select);
 
+    // delete
+    var delName = new Argument<string>("name") { Description = "Project to delete." };
+    var delYes = new Option<bool>("--yes", "-y") { Description = "Skip the confirmation prompt." };
+    var delete = new Command("delete", "Delete a project/wiki and all its data (irreversible).");
+    delete.Arguments.Add(delName);
+    delete.Options.Add(delYes);
+    delete.SetAction((pr, ct) => DeleteWikiAsync(pr.GetValue(delName)!, pr.GetValue(delYes), ct));
+    project.Subcommands.Add(delete);
+
     return project;
 }
 
@@ -578,6 +622,15 @@ static Command BuildWikiCommand()
         return 0;
     });
     wiki.Subcommands.Add(inspect);
+
+    //delete a wiki by name, with a confirmation prompt unless --yes is specified. This will remove the wiki directory and all its pages, as well as any associated embeddings and registry entries.
+    var delName = new Argument<string>("name") { Description = "Project to delete." };
+    var delYes = new Option<bool>("--yes", "-y") { Description = "Skip the confirmation prompt." };
+    var delete = new Command("delete", "Delete a project/wiki and all its data (irreversible).");
+    delete.Arguments.Add(delName);
+    delete.Options.Add(delYes);
+    delete.SetAction((pr, ct) => DeleteWikiAsync(pr.GetValue(delName)!, pr.GetValue(delYes), ct));
+    wiki.Subcommands.Add(delete);
 
     wiki.Subcommands.Add(BuildPageCommand());
     return wiki;

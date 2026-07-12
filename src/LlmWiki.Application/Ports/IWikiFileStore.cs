@@ -13,4 +13,6 @@ public interface IWikiFileStore
     Task<bool> ExistsAsync(string relativePath, CancellationToken cancellationToken = default);
 
     IAsyncEnumerable<string> ListAsync(string prefix, CancellationToken cancellationToken = default);
+
+    Task DeleteAsync(string relativePath, CancellationToken cancellationToken = default);
 }

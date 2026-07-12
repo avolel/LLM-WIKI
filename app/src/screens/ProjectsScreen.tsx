@@ -8,7 +8,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { createProject, listProjects, type ProjectInfo } from '../api/client';
+import { createProject, deleteProject, listProjects, type ProjectInfo } from '../api/client';
 import { useApp } from '../state';
 import { theme } from '../theme';
 
@@ -24,6 +24,7 @@ export function ProjectsScreen() {
   const [name, setName] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setState({ kind: 'loading' });
@@ -34,6 +35,23 @@ export function ProjectsScreen() {
       setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
     }
   }, []);
+
+  const remove = async (name: string) => {
+  if (deleting) return;
+  if (typeof window !== 'undefined' &&
+      !window.confirm(`Delete "${name}" and all its data? This cannot be undone.`)) return;
+  setDeleting(name);
+  setCreateError(null);
+  try {
+    await deleteProject(name);
+    if (name === activeProject) setActiveProject(null);   // clears localStorage (existing behaviour)
+    await load();
+  } catch (err) {
+    setCreateError(err instanceof Error ? err.message : String(err));
+  } finally {
+    setDeleting(null);
+  }
+};
 
   useEffect(() => {
     void load();
@@ -87,6 +105,13 @@ export function ProjectsScreen() {
                   {active ? '★ ' : ''}
                   {p.name}
                 </Text>
+                <Pressable
+                  style={styles.deleteBtn}
+                  disabled={deleting === p.name}
+                  onPress={(e) => { e.stopPropagation?.(); void remove(p.name); }}
+                >
+                  <Text style={styles.deleteText}>{deleting === p.name ? '…' : 'Delete'}</Text>
+                </Pressable>
               </View>
               <Text style={styles.meta}>
                 {p.pageCount} pages · {p.sourceCount} sources · last ingest {fmt(p.lastIngestAt)}
@@ -156,4 +181,11 @@ const styles = StyleSheet.create({
   createText: { color: '#fff', fontWeight: '700' },
   muted: { color: theme.colors.muted },
   error: { color: theme.colors.fail, fontSize: theme.font.sm },
+  deleteBtn: {
+    justifyContent: 'center',
+    backgroundColor: theme.colors.fail,
+    borderRadius: theme.radius.md,
+    paddingHorizontal: theme.spacing(2),
+  },
+  deleteText: { color: '#fff', fontWeight: '700' },
 });

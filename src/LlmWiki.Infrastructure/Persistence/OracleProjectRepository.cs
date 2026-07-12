@@ -135,4 +135,14 @@ public sealed class OracleProjectRepository(IOptions<OracleOptions> oracle) : IP
         }
         finally { _schemaGate.Release(); }
     }
+
+    public async Task DeleteAsync(string name, CancellationToken cancellationToken = default)
+    {
+        await using var conn = await OpenAsync(cancellationToken);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM wiki_project WHERE name = :name";
+        cmd.BindByName = true;
+        cmd.Parameters.Add(":name", name);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
 }

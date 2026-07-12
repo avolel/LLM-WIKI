@@ -12,7 +12,10 @@ namespace LlmWiki.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("projects")]
-public sealed class ProjectController(IProjectRepository projects, IWikiRepository wiki) : ControllerBase
+public sealed class ProjectController(
+    IProjectRepository projects, 
+    IWikiRepository wiki, 
+    IVectorStore vectors) : ControllerBase
 {
     /// <summary>List registered projects with metadata (BR-050/052).</summary>
     [HttpGet]
@@ -31,6 +34,16 @@ public sealed class ProjectController(IProjectRepository projects, IWikiReposito
         await wiki.CreateWikiAsync(new WikiSchema { WikiName = req.Name, LinkStyle = req.LinkStyle ?? LinkStyle.Wikilink }, ct);
         await projects.RegisterAsync(req.Name, ct);
         return Created($"/projects/{req.Name}", await projects.GetAsync(req.Name, ct));
+    }
+
+    [HttpDelete("{name}")]
+    public async Task<IActionResult> DeleteAsync(string name, CancellationToken ct)
+    {
+        if (!await wiki.WikiExistsAsync(name, ct)) return NotFound();
+        await wiki.DeleteWikiAsync(name, ct);                 // canonical
+        try { await vectors.DeleteWikiAsync(name, ct); } catch { /* best-effort (NFR-06) */ }
+        try { await projects.DeleteAsync(name, ct); } catch { /* best-effort */ }
+        return NoContent();
     }
 }
 

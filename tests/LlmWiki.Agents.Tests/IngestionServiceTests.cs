@@ -249,6 +249,9 @@ public sealed class IngestionServiceTests : IDisposable
             ReadOnlyMemory<float> queryEmbedding, int topK, PageType? typeFilter = null,
             CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<VectorSearchHit>>([]);
+
+        public Task DeleteWikiAsync(string wikiName, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 
     /// <summary>Fake project registry: records the metadata write so counts can be asserted.</summary>
@@ -267,6 +270,11 @@ public sealed class IngestionServiceTests : IDisposable
             => Task.FromResult<IReadOnlyList<ProjectInfo>>(Records);
         public Task<ProjectInfo?> GetAsync(string name, CancellationToken cancellationToken = default)
             => Task.FromResult(Records.FirstOrDefault(r => r.Name == name));
+        public Task DeleteAsync(string name, CancellationToken cancellationToken = default)
+        {
+            Records.RemoveAll(r => r.Name == name);
+            return Task.CompletedTask;
+        }
     }
 
     /// <summary>Fake project registry that fails the metadata write (simulates Oracle being down).</summary>
@@ -279,6 +287,8 @@ public sealed class IngestionServiceTests : IDisposable
             => Task.FromResult<IReadOnlyList<ProjectInfo>>([]);
         public Task<ProjectInfo?> GetAsync(string name, CancellationToken cancellationToken = default)
             => Task.FromResult<ProjectInfo?>(null);
+        public Task DeleteAsync(string name, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("oracle down");
     }
 
     /// <summary>Fake vector store that fails every upsert (simulates Oracle being down).</summary>
@@ -292,5 +302,8 @@ public sealed class IngestionServiceTests : IDisposable
             ReadOnlyMemory<float> queryEmbedding, int topK, PageType? typeFilter = null,
             CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<VectorSearchHit>>([]);
+
+        public Task DeleteWikiAsync(string wikiName, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("oracle down");
     }
 }

@@ -27,4 +27,6 @@ public interface IProjectRepository
 
     /// <summary>Record an ingest: stamp last_ingest_at = now and store recomputed counts. BR-052.</summary>
     Task RecordIngestAsync(string name, int pageCount, int sourceCount, CancellationToken cancellationToken = default);
+
+    Task DeleteAsync(string name, CancellationToken cancellationToken = default);
 }

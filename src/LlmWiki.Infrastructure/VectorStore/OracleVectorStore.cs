@@ -291,4 +291,14 @@ public sealed class OracleVectorStore(IOptions<OracleOptions> oracle, IOptions<E
 
     private static PageType ParseType(string s) =>
         Enum.TryParse<PageType>(s, ignoreCase: true, out var t) ? t : PageType.Summary;
+
+    public async Task DeleteWikiAsync(string wikiName, CancellationToken cancellationToken = default)
+    {
+        await using var conn = await OpenAsync(cancellationToken);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM wiki_page WHERE wiki_name = :wiki";
+        cmd.BindByName = true;
+        cmd.Parameters.Add(":wiki", wikiName);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
 }

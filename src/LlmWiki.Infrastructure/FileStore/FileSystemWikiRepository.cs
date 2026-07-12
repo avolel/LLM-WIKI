@@ -132,4 +132,7 @@ public sealed class FileSystemWikiRepository(IWikiFileStore files) : IWikiReposi
         !path.EndsWith($"/{IndexFile}", StringComparison.Ordinal) &&
         !path.EndsWith($"/{LogFile}", StringComparison.Ordinal) &&
         !path.Contains("/raw/", StringComparison.Ordinal);
+
+    public Task DeleteWikiAsync(string wikiName, CancellationToken cancellationToken = default) =>
+        files.DeleteAsync(wikiName, cancellationToken);
 }
