@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using LlmWiki.Api.Controllers;
 using LlmWiki.Application.Ingestion;
 using LlmWiki.Application.Linting;
@@ -24,6 +26,10 @@ public class LintEndpointTests(WebApplicationFactory<Program> factory)
             services.RemoveAll<IWikiRepository>();
             services.AddSingleton<IWikiRepository, FakeRepo>();
         })).CreateClient();
+
+    // The API now emits enums as their string names (Phase 8); match that when deserializing responses.
+    private static readonly JsonSerializerOptions Json =
+        new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
 
     private static readonly SuggestedFix Fix =
         new("concepts/ghost.md", "Ghost", PageType.Concept, "stub");
@@ -58,7 +64,7 @@ public class LintEndpointTests(WebApplicationFactory<Program> factory)
             new ApplyFixRequest("demo", FixBearing));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var outcome = await response.Content.ReadFromJsonAsync<PageOutcome>();
+        var outcome = await response.Content.ReadFromJsonAsync<PageOutcome>(Json);
         Assert.Equal(PageChange.StubCreated, outcome!.Change);
     }
 

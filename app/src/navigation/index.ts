@@ -1,10 +1,16 @@
-// Navigation wiring placeholder. A navigator (e.g. React Navigation) is added in Phase 8;
-// for Phase 0 the app renders the HomeScreen directly to prove API connectivity.
+// Tab set for the Phase 8 custom TabBar (no navigation library — a useState switcher in App.tsx).
 export const ROUTES = {
-  Home: 'Home',
   Chat: 'Chat',
   Browse: 'Browse',
   Projects: 'Projects',
+  Status: 'Status',
 } as const;
 
-export type RouteName = (typeof ROUTES)[keyof typeof ROUTES];
+export type RouteName = keyof typeof ROUTES;
+
+export const TABS: { key: RouteName; label: string }[] = [
+  { key: 'Chat', label: 'Chat' },
+  { key: 'Browse', label: 'Browse' },
+  { key: 'Projects', label: 'Projects' },
+  { key: 'Status', label: 'Status' },
+];

@@ -31,6 +31,19 @@ public sealed class QueryController(IQueryService svc, IWikiRepository repo) : C
 
         return Ok(result);
     }
+
+    /// <summary>
+    /// Persist an already-synthesised, covered answer as an Answer page (BR-045) without paying for a
+    /// second synthesis — the Phase 8 client's "Save answer" button. Refuses uncovered (gap) answers.
+    /// </summary>
+    [HttpPost("save")]
+    public async Task<IActionResult> SaveAsync(SaveAnswerRequest req, CancellationToken ct)
+    {
+        if (!await repo.WikiExistsAsync(req.Wiki, ct)) return NotFound();
+        if (!req.Result.Covered) return BadRequest("won't save an uncovered (gap) answer");
+        var outcome = await svc.SaveAnswerAsync(req.Wiki, req.Result, ct);
+        return Ok(outcome);
+    }
 }
 
 /// <summary>Request body for <c>POST /query</c>. <see cref="History"/> carries follow-up context.</summary>
@@ -41,3 +54,6 @@ public record QueryRequest(
     int? TopK,
     PageType? Type,
     bool? Save);
+
+/// <summary>Request body for <c>POST /query/save</c>: persist a produced result as an Answer page.</summary>
+public record SaveAnswerRequest(string Wiki, QueryResult Result);
