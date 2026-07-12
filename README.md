@@ -23,7 +23,14 @@ endpoints walk the wiki, produce a **prioritised** health report (contradictions
 broken links, orphans, missing pages → thin pages and suggested questions/sources), and let you
 **accept/reject** fixes interactively; structural issues are found deterministically and the semantic
 ones by a single LLM call, and accepting a missing-page finding writes an indexed stub — the only
-page change, always confirmed unless you pass `--fix`.
+page change, always confirmed unless you pass `--fix`; and
+**Phase 8** builds the product's *front door* — a web-first **Expo (React Native) client** for chat
+(markdown answers with clickable citations that open the cited page, follow-up questions, save-answer,
+and honest "not covered" gaps), a wiki browser grouped by category, and project list/create/select —
+over a small added read/save API (`GET /wikis/{wiki}/pages`, `GET /wikis/{wiki}/pages/{path}`,
+`POST /query/save`) with CORS and string-enum JSON turned on; the client is deliberately
+minimal-dependency (a custom tab switcher and a small custom markdown renderer, one typed `client.ts`).
+The whole product surface — backend, CLI, API, and web client — is now real.
 See
 [docs/plans/plan-phase-0.md](docs/plans/plan-phase-0.md),
 [docs/plans/plan-phase-1.md](docs/plans/plan-phase-1.md),
@@ -32,11 +39,13 @@ See
 [docs/plans/plan-phase-4.md](docs/plans/plan-phase-4.md),
 [docs/plans/plan-phase-5.md](docs/plans/plan-phase-5.md),
 [docs/plans/plan-phase-6.md](docs/plans/plan-phase-6.md),
-[docs/plans/plan-phase-7.md](docs/plans/plan-phase-7.md), a plain-English
+[docs/plans/plan-phase-7.md](docs/plans/plan-phase-7.md),
+[docs/plans/plan-phase-8.md](docs/plans/plan-phase-8.md), a plain-English
 [code overview for developers](docs/code-overview/code-overview.md), and the architecture decisions in
 [docs/adr/0001-phase-0-foundations.md](docs/adr/0001-phase-0-foundations.md),
-[docs/adr/0002-phase-6-project-registry.md](docs/adr/0002-phase-6-project-registry.md), and
-[docs/adr/0003-phase-7-lint.md](docs/adr/0003-phase-7-lint.md).
+[docs/adr/0002-phase-6-project-registry.md](docs/adr/0002-phase-6-project-registry.md),
+[docs/adr/0003-phase-7-lint.md](docs/adr/0003-phase-7-lint.md), and
+[docs/adr/0004-phase-8-client.md](docs/adr/0004-phase-8-client.md).
 
 ## Layout
 
@@ -334,6 +343,29 @@ dotnet run --project src/LlmWiki.Api            # http://localhost:5080
 curl -s localhost:5080/lint -H 'content-type: application/json' -d '{"wiki":"demo"}'
 ```
 
+## Web client (Phase 8)
+
+A web-first **Expo (React Native)** client puts a human-usable front end on the whole workflow: a
+**Chat** tab (grounded, cited answers with a spinner while it thinks; tap a citation to open the cited
+page; follow-up questions keep context; **Save answer** persists a good answer as a new page), a
+**Browse** tab (the wiki's pages grouped by category, tap to read, pull to refresh), a **Projects** tab
+(list/create/select the active project with its page/source counts), and a **Status** tab (the Phase-0
+diagnostics). It talks only to the API over one typed `client.ts`, and is deliberately
+minimal-dependency — a custom tab switcher and a small custom markdown renderer, no navigation or
+markdown library.
+
+```bash
+dotnet run --project src/LlmWiki.Api            # the API must be running (CORS is on for the web origin)
+cd app && npm install && npm run web            # Expo web at http://localhost:8081
+#   set EXPO_PUBLIC_API_BASE_URL if the API is not on http://localhost:5080
+```
+
+The client needs three read/save endpoints (added this phase, reusing existing ports):
+`GET /wikis/{wiki}/pages` (page tree by category), `GET /wikis/{wiki}/pages/{path}` (one page's
+content, so a citation opens a real page), and `POST /query/save` (persist a covered answer without
+re-synthesising). Enums now serialize as their names (`"Entity"`, not `1`). Token streaming, native
+device verification, and any ingestion/lint UI are deferred; ingestion stays the CLI command.
+
 ## Configuration
 
 All secrets live in `env/.env` (gitignored); `env/.env.example` documents every key with
@@ -385,13 +417,14 @@ Oracle holds **derived** state — a search index (`wiki_page`: embeddings + Ora
 ingest (Phase 4), and the project registry (`wiki_project`: metadata) written best-effort on ingest
 and by the `project` commands (Phase 6). `docker/oracle/spike-vector.sql` was the manual spike (R-02)
 that validated `VECTOR` DML + Oracle Text before the real `OracleVectorStore` adapter was built. No
-application-adapter stubs remain — `OracleProjectRepository` is filled (Phase 6). Phase 5 reads the
-index into query context, and Phase 7 added the lint / health-check surface; carrying the log into
-session context (BR-023), token **streaming** to the client, and the React Native chat UI remain the
-only unbuilt work (Phase 8). Everything else is real: the embedding/chat/Oracle-health diagnostics
-paths, the file-backed wiki store/repository, the journal, the hybrid vector store, the
+application-adapter stubs remain — `OracleProjectRepository` is filled (Phase 6). Phase 8 built the
+web client and its browse/save API, so the whole product surface is real: the embedding/chat/Oracle-health
+diagnostics paths, the file-backed wiki store/repository, the journal, the hybrid vector store, the
 query/synthesis workflow (`ask` REPL + `POST /query`), the project registry (`project` CLI +
-`/projects` API), and the lint / health-check workflow (`lint` CLI + `POST /lint`·`/lint/apply`).
+`/projects` API), the lint / health-check workflow (`lint` CLI + `POST /lint`·`/lint/apply`), and the
+Expo chat/browse/projects client (`GET /wikis/{wiki}/pages(/{path})` + `POST /query/save`). What
+remains deferred: carrying the log into session context (BR-023) and token **streaming** to the client
+(the client shows a loading state instead), plus native device verification and any ingestion/lint UI.
 
 > Note: the .NET 10 SDK emits a solution as `LlmWiki.slnx` (XML solution format). Use
 > `dotnet build LlmWiki.slnx` (or just `dotnet build`).

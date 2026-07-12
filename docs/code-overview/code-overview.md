@@ -49,7 +49,7 @@ Domain  ←  Application (ports)  ←  Infrastructure (adapters: Oracle, Ollama,
 | **`LlmWiki.Infrastructure`** | **Adapters** — the real implementations of every port (Oracle, Ollama, OpenAI/Anthropic, file store). Owns *all* Semantic Kernel + Oracle wiring. | Application, Shared |
 | **`LlmWiki.Agents`** | LLM agent orchestration. Today: the ingestion pipeline, the backfill indexer, the query/synthesis service, and the lint/health-check service — all written against ports only (no SK types) so they stay unit-testable. | Application, Shared |
 | **`LlmWiki.Shared`** | Cross-cutting config: `env/.env` loading + strongly-typed options. A leaf with no project deps. | nothing |
-| **`LlmWiki.Api`** | ASP.NET host — minimal APIs (`/health`, `/diagnostics`) **plus** the Phase 5 `POST /query`, Phase 6 `GET`·`POST /projects`, and Phase 7 `POST /lint`·`/lint/apply` MVC controllers and Swagger UI. A thin **composition root**. | Infrastructure, Agents, Shared |
+| **`LlmWiki.Api`** | ASP.NET host — minimal APIs (`/health`, `/diagnostics`) **plus** the Phase 5 `POST /query`, Phase 6 `GET`·`POST /projects`, Phase 7 `POST /lint`·`/lint/apply`, and Phase 8 `GET /wikis/{wiki}/pages`·`GET /wikis/{wiki}/pages/{path}`·`POST /query/save` MVC controllers and Swagger UI; Phase 8 also turns on CORS + string-enum JSON. A thin **composition root**. | Infrastructure, Agents, Shared |
 | **`LlmWiki.Cli`** | Command-line host (`doctor`, `wiki`, `ingest`, `search`, `reindex`, `ask`, `project`, `lint`). The other composition root. | Infrastructure, Agents, Shared |
 
 **Why this matters when you edit code:** if you find yourself wanting to `using Oracle.…` or
@@ -437,6 +437,52 @@ journal/embed failure is recorded on the `PageOutcome.Detail`, never thrown. Rep
   returns the report; `POST /lint/apply` applies one finding the client echoes back (404 unknown wiki,
   400 fixless finding, 422 failed apply) — the full report+apply surface the Phase 8 client will drive.
 
+### 6i. The client — Expo (React Native) chat/browse app + the API glue it needs (Phase 8)
+
+The product's front door: a **web-first** Expo (React Native) client for chat, browse, and projects,
+plus three small API additions that reuse existing ports (no new orchestration, no new Oracle table).
+
+**API additions.** [`Program.cs`](../../src/LlmWiki.Api/Program.cs) now turns on **CORS** (permissive
+default policy — the Expo web build is a browser origin, single local user, NFR-04) and a
+`JsonStringEnumConverter` for both the controller and minimal-API pipelines, so enums cross the wire as
+their **names** (`"Entity"`, not `1`) matching the client's string-union types.
+[`WikiController`](../../src/LlmWiki.Api/Controllers/WikiController.cs) adds a read-only browse surface —
+`GET /wikis/{wiki}/pages` groups `ListPagesAsync` paths by their top-level typed directory into a
+`WikiTree` (BR-073), and the catch-all `GET /wikis/{wiki}/pages/{**relativePath}` returns one page via
+`ReadPageAsync` so a citation opens a real page (BR-071; `FileNotFound`/`DirectoryNotFound` → 404).
+[`QueryController`](../../src/LlmWiki.Api/Controllers/QueryController.cs) gains `POST /query/save`, which
+persists an already-synthesised **covered** answer via `IQueryService.SaveAnswerAsync` (BR-045) without
+paying for a second synthesis (uncovered → 400). The existing `Save` flag on `POST /query` stays for
+CLI back-compat.
+
+**The client** ([`app/`](../../app)) is minimal-dependency by design (decision: avoid compat risk on the
+bleeding-edge Expo SDK 56 / RN 0.85 / React 19 stack): **no** navigation, markdown, or state library
+added. Structure:
+
+- **One typed HTTP client** ([`src/api/client.ts`](../../app/src/api/client.ts)) — the *only* thing that
+  knows the wire format (NFR-07: SK/Oracle never leak toward the UI). Extends the Phase-0 `getJson` with
+  a `postJson` and typed calls for projects, query, save, and browse; enums are string unions.
+- **A custom tab switcher** — [`App.tsx`](../../app/App.tsx) holds the active tab in `useState` over four
+  screens (Chat / Browse / Projects / Status) above a custom [`TabBar`](../../app/src/components/TabBar.tsx),
+  wrapped in [`AppProvider`](../../app/src/state/index.tsx) (a Context holding the **active project**,
+  persisted to `localStorage` on web — BR-050). No React Navigation.
+- **A small custom markdown renderer** ([`Markdown.tsx`](../../app/src/components/Markdown.tsx)) — a
+  line-based block parser (headings, lists, fenced/inline code, pipe tables) + an inline span parser
+  (bold/italic/code/links) into RN primitives, unknown syntax falling back to plain text (BR-070/043,
+  NFR-09). Links call an optional `onLinkPress` so citations/wikilinks open a page.
+- **Screens.** [`ChatScreen`](../../app/src/screens/ChatScreen.tsx) is the core surface (BR-070/071/072/074):
+  ask → `ActivityIndicator` "Thinking…" → markdown answer with clickable [`CitationChip`](../../app/src/components/CitationChip.tsx)s
+  (→ [`PageModal`](../../app/src/components/PageModal.tsx)), carrying `ConversationTurn[]` history for
+  follow-ups (BR-044); a **"Save answer"** button on covered answers (BR-045) and an honest "Not covered"
+  note otherwise (BR-042). [`BrowseScreen`](../../app/src/screens/BrowseScreen.tsx) renders the `WikiTree`
+  grouped by category with pull-to-refresh (BR-073); [`ProjectsScreen`](../../app/src/screens/ProjectsScreen.tsx)
+  lists/creates/selects projects with their Oracle metadata (BR-050/052). `HomeScreen` is reused as the
+  **Status** tab (Phase-0 diagnostics, unchanged).
+
+Every network call has explicit loading + error states (NFR-08). **Deferred** (decision-locked): true
+SSE/token streaming (loading-state-only stands in for BR-074 now), native device verification, and any
+ingestion or lint UI — ingestion stays CLI-only (BR-075, shipped in Phase 2).
+
 ---
 
 ## 7. Cross-cutting conventions
@@ -457,7 +503,8 @@ Adapters for phases not yet built are **registered in DI but throw**
 `NotImplementedException("… not implemented until Phase N")`, so accidental use fails loudly instead
 of silently doing nothing. When you implement a later phase, you **fill the existing stub** (as
 Phase 4 did to `OracleVectorStore` and Phase 6 did to `OracleProjectRepository`) — you don't add a
-parallel type. No application-adapter stubs remain — Phase 7's linting/health-check is now wired, leaving only Phase 8's React-Native client unbuilt.
+parallel type. No stubs remain — Phase 7 wired the last application adapter and Phase 8 built out the
+React-Native client, so the whole BRD surface (backend + CLI + API + web client) is now real.
 
 ### Security
 
@@ -486,7 +533,7 @@ committed credential. Options classes that hold keys are never logged.
 | 5 | Query/synthesis: index → hybrid search → cited answer; `ask` REPL + `POST /query`; save-answer | ✅ real |
 | 6 | Project registry: Oracle `wiki_project` metadata, `project` CLI + `/projects` API, active-project pointer, best-effort ingest metadata | ✅ real |
 | 7 | Lint / health-check: structural + one-LLM-call findings, prioritised report, interactive accept/reject stub-creation, `lint` CLI + `POST /lint`·`/lint/apply` API | ✅ real |
-| 8 | React Native / Expo UI, token streaming, log-into-session-context (BR-023) | 🔲 skeleton in `app/` |
+| 8 | Expo (web-first) client — chat/citations/browse/projects — + `GET /wikis/{wiki}/pages(/{path})`·`POST /query/save`, CORS, string-enum JSON | ✅ real (token streaming deferred) |
 
 ---
 
