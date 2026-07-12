@@ -36,6 +36,8 @@ services:
     # Embeddings provider for nomic-embed-text (768-dim). CPU is fine for Phase 0; GPU optional.
     image: ollama/ollama:latest
     container_name: llmwiki-ollama
+    environment:
+      - OLLAMA_CONTEXT_LENGTH=8192       # fits llama3.1-8B KV cache in a 12GB GPU; ~6k-token sources OK
     ports:
       - "11434:11434"
     volumes:
